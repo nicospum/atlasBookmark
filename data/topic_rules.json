@@ -1,0 +1,44 @@
+{
+  "IA": [
+    "ia", "ai", "artificial intelligence", "inteligencia artificial", "machine learning",
+    "llm", "llms", "agent", "agents", "agente", "agentes", "openrouter", "claude", "gpt",
+    "opus", "openai", "gemini", "deepseek", "ollama", "rag", "prompt", "prompts",
+    "reasoning", "neural", "vector", "embedding", "embeddings", "transformer", "mcp"
+  ],
+  "Diseño": [
+    "design", "diseño", "figma", "ux", "ui", "interface", "interfaz", "interfaces",
+    "frontend", "css", "tailwind", "tipografía", "typography", "layout", "visual",
+    "estética", "shadcn", "animation", "animations", "remotion", "bauhaus"
+  ],
+  "Programación": [
+    "code", "coding", "código", "programming", "programación", "developer", "dev",
+    "software", "typescript", "javascript", "python", "github", "github.com", "api",
+    "react", "next.js", "nextjs", "sqlite", "postgres", "neon", "prisma", "fastify",
+    "backend", "database", "playwright", "semgrep", "sentry", "repo", "open source"
+  ],
+  "Producto": [
+    "product", "producto", "startup", "saas", "launch", "customer", "usuario",
+    "user research", "analytics", "growth", "mrr", "feature", "retención",
+    "onboarding", "spec", "specs", "roadmap", "mvp"
+  ],
+  "Lecturas": [
+    "book", "libro", "article", "artículo", "paper", "read", "leer", "lectura",
+    "essay", "ensayo", "guide", "guía", "tutorial", "filosofía", "reflexión", "thread"
+  ],
+  "Negocios": [
+    "business", "negocio", "negocios", "market", "mercado", "sales", "ventas",
+    "funding", "revenue", "finance", "finanzas", "marketing", "agency", "empresa"
+  ],
+  "Cultura": [
+    "music", "música", "film", "cine", "culture", "cultura", "history", "historia",
+    "art", "arte", "literature", "literatura", "museo", "fotografía", "video"
+  ],
+  "Viajes": [
+    "travel", "trip", "hotel", "flight", "viaje", "viajes", "turismo", "ciudad",
+    "tokio", "japón", "montaña", "paisaje", "aeropuerto"
+  ],
+  "Ideas": [
+    "idea", "ideas", "estrategia", "strategy", "hábito", "atención", "foco",
+    "futuro", "mente", "consejo", "vida", "second brain", "workflow"
+  ]
+}

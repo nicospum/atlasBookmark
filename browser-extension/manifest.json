@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "Atlas de Guardados · Captura local",
+  "version": "1.1.0",
+  "description": "Captura publicaciones visibles de tus guardados de X e Instagram y sincroniza en 1 clic con Atlas (localhost:3070) o exporta JSON.",
+  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
+  "host_permissions": ["http://localhost:3070/*", "http://127.0.0.1:3070/*"],
+  "action": { "default_popup": "popup.html", "default_title": "Atlas de Guardados" }
+}

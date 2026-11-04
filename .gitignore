@@ -1,0 +1,31 @@
+# Dependencies & Build
+node_modules/
+.next/
+tsconfig.tsbuildinfo
+
+# Environment variables & Secrets
+.env
+.env.*
+.env*.local
+
+# Raw captures & browser profiles (never commit raw HARs or session profiles)
+data/raw/
+data/media/
+data/*.db-shm
+data/*.db-wal
+.playwright-profile/
+.atlas_browser_profile/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# v0 / Vercel / OS
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+.snowflake/
+.v0-trash/
+.vercel/
+.DS_Store

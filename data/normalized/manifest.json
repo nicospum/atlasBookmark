@@ -1,0 +1,22 @@
+{
+  "schema": "atlas-v1",
+  "updated_at": "2026-09-28T06:03:42.477003+00:00",
+  "sources": [
+    {
+      "file": "data\\raw\\x\\x.com.initial.har",
+      "bookmark_requests": 1,
+      "records": 20,
+      "processed_at": "2026-09-28T06:03:42.471999+00:00"
+    }
+  ],
+  "merge": {
+    "incoming": 20,
+    "unique_added": 0,
+    "duplicates": 20,
+    "total": 20
+  },
+  "total_records": 20,
+  "backup": "data\\normalized\\backups\\archive.20260928T060342Z.json",
+  "checkpoint": "data\\checkpoints\\x-import.last.json",
+  "history_event_id": "4e23bfb1-b48b-4975-aa28-c764d8caf93e"
+}

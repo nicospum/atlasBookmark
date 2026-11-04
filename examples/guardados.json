@@ -1,0 +1,6 @@
+{
+  "items": [
+    {"sourceUrl":"https://x.com/ejemplo/status/1234567890123456789","caption":"Ejemplo de prueba: diseño de interfaces con Figma y React. Este registro es ficticio.","authorName":"Ejemplo ficticio","authorHandle":"@ejemplo","topics":["Ejemplo"]},
+    {"sourceUrl":"https://www.instagram.com/p/ATLAS_DEMO/","caption":"Ejemplo de prueba: un libro de fotografía para planear el próximo viaje. Este registro es ficticio.","authorName":"Ejemplo ficticio","topics":["Ejemplo"]}
+  ]
+}

@@ -1,0 +1,979 @@
+[
+  {
+    "record_id": "x:2103594988550652353",
+    "platform": "X",
+    "text": "this is pure f*cking treasure\n\n20 AI agent skills that cover the entire build-to-launch loop\n\nspecs. architecture. agents. backend. data. UI. testing. security. analytics. delivery\n\nDEFINE THE JOB\n01 bmad-spec\n▸ https://t.co/v7ach7Dnb6\n02 domain-modeling\n▸ https://t.co/bAZECpySPm\n03 codebase-design\n▸ https://t.co/bAZECpySPm\n04 google-agents-cli-workflow\n▸ https://t.co/f5chsPgmbr\n05 prompt-optimizer\n▸ https://t.co/rpgDheF4qa\n\nBUILD THE SYSTEM\n06 google-agents-cli-adk-code\n▸ https://t.co/f5chsPgmbr\n07 mastra\n▸ https://t.co/5VjFI7sTA4\n08 typesafe-ai\n▸ https://t.co/S8dvVT7gYg\n09 fastify-best-practices\n▸ https://t.co/sI4Ffq8g0u\n10 neon-postgres\n▸ https://t.co/EessZ6sgC1\n\nMAKE IT USABLE\n11 prisma-database-setup\n▸ https://t.co/CyM5RNUuHe\n12 clerk-orgs\n▸ https://t.co/z2cyCtShlg\n13 emil-design-eng\n▸ https://t.co/Sswyb7L7xu\n14 review-animations\n▸ https://t.co/Sswyb7L7xu\n15 remotion-best-practices\n▸ https://t.co/2CtNBrJFSY\n\nVERIFY THE REAL THING\n16 playwright-cli\n▸ https://t.co/taT5bJJVDe\n17 semgrep\n▸ https://t.co/htWtHG7OqB\n18 sentry-fix-issues\n▸ https://t.co/WFaslSmHxc\n19 instrument-product-analytics\n▸ https://t.co/rp7rPu4y9L\n20 email-best-practices\n▸ https://t.co/sJiZV9QXGz\n\nthe loop:\n\nturn the idea into a spec → model the system → build the agent and product → test the browser journey → catch failures → measure what users do → improve the next version\n\npick the bottleneck in your current project. install the skill that attacks that step first\n\nsave this, then build a second brain for your product ⭣",
+    "author": "beamnxw ./",
+    "handle": "@beamnxw",
+    "url": "https://x.com/beamnxw/status/2103594988550652353",
+    "domain": "github.com",
+    "published_at": "2026-09-25T21:18:22+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Diseño",
+      "Programación",
+      "Producto"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2103594287451545601/img/uMMnP5M3nP-20iPx.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "manual",
+    "classification_matches": {
+      "IA": [
+        "ai",
+        "agent",
+        "agents"
+      ],
+      "Diseño": [
+        "design",
+        "ui"
+      ],
+      "Programación": [
+        "code",
+        "github"
+      ],
+      "Producto": [
+        "product",
+        "launch",
+        "analytics"
+      ]
+    },
+    "source": "@beamnxw",
+    "media_status": "not_requested",
+    "confidence": "",
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [
+      "https://github.com/bmad-code-org/bmad-method"
+    ],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103601688489898246",
+    "platform": "X",
+    "text": "OPUS 5.5 MADE A PRODUCT LAUNCH VIDEO IN 1 MINUTE FOR ABOUT $2, A JOB THAT USED TO TAKE AN AGENCY WEEKS\n\nDeedy Das made one for an inference startup, then had it turn a research paper into an 8-minute 3Blue1Brown-style explainer. \nThere's even an open source version: paste a URL, Opus writes the whole film as HTML, and it renders straight to MP4. The 90th percentile explainer channel is automated now.\n\nRepo: https://t.co/YJdRouzO4S",
+    "author": "0xMarioNawfal",
+    "handle": "@RoundtableSpace",
+    "url": "https://x.com/RoundtableSpace/status/2103601688489898246",
+    "domain": "x.com",
+    "published_at": "2026-09-25T21:45:00+00:00",
+    "saved_at": "",
+    "content_type": "post",
+    "topics": [
+      "IA",
+      "Programación",
+      "Producto",
+      "Lecturas",
+      "Negocios",
+      "Cultura"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": false,
+    "media_urls": [],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "opus"
+      ],
+      "Programación": [
+        "repo",
+        "open source"
+      ],
+      "Producto": [
+        "product",
+        "startup",
+        "launch"
+      ],
+      "Lecturas": [
+        "paper"
+      ],
+      "Negocios": [
+        "agency"
+      ],
+      "Cultura": [
+        "film",
+        "video"
+      ]
+    },
+    "source": "@RoundtableSpace",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103669661976219822",
+    "platform": "X",
+    "text": "JEV + OPUS 5.5 CAN REDESIGN A LIVE WEBSITE AS YOU SCROLL\n\npaste any link, hit Start, and watch each section get rebuilt in real time.\n\nJEV decides the layout and style in ~0.1s.\nOpus 5.5 writes the TSX + CSS.\nthen the new section swaps in instantly.\n\n8 sections of a 2015 hosting site were rebuilt in ~20 seconds.\n\nJEV decides.\nOpus designs.",
+    "author": "BARIK",
+    "handle": "@Rahmanbarik",
+    "url": "https://x.com/Rahmanbarik/status/2103669661976219822",
+    "domain": "x.com",
+    "published_at": "2026-09-26T02:15:06+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Diseño"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2103669590769410048/img/5aX_jIj3o6vP1w2h.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "opus"
+      ],
+      "Diseño": [
+        "css",
+        "layout"
+      ]
+    },
+    "source": "@Rahmanbarik",
+    "media_status": "not_requested",
+    "confidence": 0.81,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103400946198085964",
+    "platform": "X",
+    "text": "هل تريد بناء وكيل Agent لك؟\n\nحتى لو مبتدئ Google نشرت مقطع فيديو لك بشرح بسيط ودقيق وخطوة بخطوة لبناء Agent\n\nالشرح بكل اللغات (يمكن دبلجته للغة العربية)\n\nhttps://t.co/2NXn457p8D https://t.co/TahznvIizp",
+    "author": "سعيد الكلباني",
+    "handle": "@smalkalbani",
+    "url": "https://x.com/smalkalbani/status/2103400946198085964",
+    "domain": "youtu.be",
+    "published_at": "2026-09-25T08:27:19+00:00",
+    "saved_at": "",
+    "content_type": "media",
+    "topics": [
+      "IA"
+    ],
+    "language": "ar",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/media/HTDIAgwakAAVY7d.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "agent"
+      ]
+    },
+    "source": "@smalkalbani",
+    "media_status": "not_requested",
+    "confidence": 0.5700000000000001,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [
+      "https://youtu.be/Zqno_vux6d8"
+    ],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103319661073055910",
+    "platform": "X",
+    "text": "Jev + Qwen-3.8 = Kev. you can now run your own decision model locally, for free.\n\nkev is an open source family of small decision models built on qwen3.5 and qwen3.8, reverse-engineered from jev's own published architecture.\n\n> drop-in compatible with typesafe's own sdk\n> answers yes/no, multi-choice, and rating in one call\n> sizes from 0.8b (laptop) to 27b (data-center gpu)\n> try it in the browser, zero install\n\n100% free. open source.",
+    "author": "Simplifying AI",
+    "handle": "@simplifyinAI",
+    "url": "https://x.com/simplifyinAI/status/2103319661073055910",
+    "domain": "x.com",
+    "published_at": "2026-09-25T03:04:19+00:00",
+    "saved_at": "",
+    "content_type": "media",
+    "topics": [
+      "IA",
+      "Programación"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/media/HTB9JiFaAAAoWL6.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "ai"
+      ],
+      "Programación": [
+        "open source"
+      ]
+    },
+    "source": "@simplifyinAI",
+    "media_status": "not_requested",
+    "confidence": 0.69,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103478609084043688",
+    "platform": "X",
+    "text": "ESTO PARECE UNA SALA DE OPERACIONES DE LA CIA. ES UN REPO DE GITHUB\n\nun dev open-sourceó un simulador de satélite espía que corre en tu navegador.\n\nabres la web y ves un globo 3D fotorrealista con aviones reales moviéndose en tiempo real. barcos. satélites. cámaras de seguridad. todo datos reales.\n\ny lo mejor es que puedes hablarle.\n\n\"llévame a tokyo\". y la cámara vuela hasta allí. \"cuántos aviones hay sobre texas\". y te responde con datos en vivo. \"entra en cockpit\". y te montas dentro del avión.\n\nel dev tenía una serie en youtube con 25 millones de views. la gente le pidió tanto el código que lo soltó todo.\n\n38k estrellas. #1 en GitHub trending. el creador de javascript dijo \"pretty cool\".\n\nse llama god's eye view.\n\nos dejo el repo abajo.",
+    "author": "liam.",
+    "handle": "@liambraus",
+    "url": "https://x.com/liambraus/status/2103478609084043688",
+    "domain": "x.com",
+    "published_at": "2026-09-25T13:35:55+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "Programación"
+    ],
+    "language": "es",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/tweet_video_thumb/HTENzscWcAAm__H.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "Programación": [
+        "código",
+        "dev",
+        "javascript",
+        "github",
+        "repo"
+      ]
+    },
+    "source": "@liambraus",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103514220528869599",
+    "platform": "X",
+    "text": "En lugar de ver Netflix este domingo, dedica 1 hora a esto.\n\nUn CURSO COMPLETO de Claude que te enseña a automatizar lo que te roba 3 horas al día. \n\nEl lunes lo agradecerás. https://t.co/NmBvDcqgDk",
+    "author": "Rodev",
+    "handle": "@romandevz",
+    "url": "https://x.com/romandevz/status/2103514220528869599",
+    "domain": "x.com",
+    "published_at": "2026-09-25T15:57:26+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA"
+    ],
+    "language": "es",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2103513422071508992/img/9ixstImX0G9C3WtC.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "claude"
+      ]
+    },
+    "source": "@romandevz",
+    "media_status": "not_requested",
+    "confidence": 0.5700000000000001,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103544401381269799",
+    "platform": "X",
+    "text": "Claude Max costs $200 a month. this repo runs Claude Code for $0.\n\nno subscription. no Anthropic bill.\n\nit's called free-claude-code. 55.9K stars, runs on your own machine.\n\n→ 54 providers with free tiers, 1.3B+ free tokens a month\n→ 10 coding agents: Claude Code, Codex, Pi, OpenCode, Cline, Aider and 4 more\n→ 1 provider goes down, it switches to your next model mid-turn\n→ up to 90% fewer terminal-output tokens with RTK\n\nthe catch: you get Claude Code, not Claude. the models are free ones from NVIDIA, Groq and OpenRouter.\n\n$200 every month, forever. free-claude-code: $0.\n\nbookmark it before your next renewal. repo below ↓\n\nhttps://t.co/9UA7DndTuE",
+    "author": "SECTOR",
+    "handle": "@sector_sol",
+    "url": "https://x.com/sector_sol/status/2103544401381269799",
+    "domain": "x.com",
+    "published_at": "2026-09-25T17:57:21+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Programación"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2103544314605293568/img/Y_ra7wdrQ5-xOXdT.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "agents",
+        "openrouter",
+        "claude"
+      ],
+      "Programación": [
+        "code",
+        "coding",
+        "repo"
+      ]
+    },
+    "source": "@sector_sol",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103486845497532873",
+    "platform": "X",
+    "text": "si usás Claude Code con Opus 5.5, corré:\n\n/claude-api prompt-audit\n\nte revisa Skills, AGENTS.md, CLAUDE.md y prompts para detectar instrucciones viejas o redundantes que pueden estar empeorando el rendimiento del modelo.",
+    "author": "santi",
+    "handle": "@santtiagom_",
+    "url": "https://x.com/santtiagom_/status/2103486845497532873",
+    "domain": "x.com",
+    "published_at": "2026-09-25T14:08:39+00:00",
+    "saved_at": "",
+    "content_type": "post",
+    "topics": [
+      "IA",
+      "Programación"
+    ],
+    "language": "es",
+    "summary": "",
+    "has_media": false,
+    "media_urls": [],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "agents",
+        "claude",
+        "opus",
+        "prompts"
+      ],
+      "Programación": [
+        "code",
+        "api"
+      ]
+    },
+    "source": "@santtiagom_",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103374441250259316",
+    "platform": "X",
+    "text": "さすがにヤバすぎwww\n動画編集、Premiere Proもカット作業の外注もいらない時代が来ました。\n\nClaude Codeに素材を投げるだけで、\n完全自動でプロ品質の動画が仕上がる『video-use』が登場。\n\n👇\n\nやっていることはかなりシンプルで、\n\nまず用意するのは撮影した動画素材（フォルダに入れるだけ）。\n次に用意するのがClaude Code。\n\nこの2つを繋いで「ローンチ動画にして」とチャットするだけで、勝手に完パケ動画が書き出される。\n\n・無音＆フィラー（えー、あのー）の完全自動カット\n・色味の自動シネマティック補正\n・音ズレやつなぎ目の音声ノイズ完全除去\n・単語単位の字幕テロップ生成\n・書き出しミスをAI自らプレビュー検品して自動リテイク\n\nポイントは\n「AIに動画丸ごと見せてトークンを溶かす」のではなく、\n音声文字起こし＋必要な瞬間だけ波形・コマを確認する超高効率アーキテクチャなこと。\n\nこれまでなら、動画編集者に数万円払って\n3〜5日待って修正依頼を投げていた作業が、\nターミナル上で数分で完成するのバグすぎw\n\nしかも100%オープンソースです。\n\n「まだ動画編集は人間がカチカチやるもの」と思っている人ほど、この差はどんどん開いていきます。\n\n今いちばん手に入れておくべきAIエージェントスキルが、ここにある。\n\nリプ欄にGitHubの導入コマンド貼っておきます👇",
+    "author": "ボンド｜AIで最高月収7800万",
+    "handle": "@bond_ai1",
+    "url": "https://x.com/bond_ai1/status/2103374441250259316",
+    "domain": "x.com",
+    "published_at": "2026-09-25T06:42:00+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Programación"
+    ],
+    "language": "ja",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2103349324323102720/img/BRlLTYYgG6QrUIRr.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "claude"
+      ],
+      "Programación": [
+        "code"
+      ]
+    },
+    "source": "@bond_ai1",
+    "media_status": "not_requested",
+    "confidence": 0.69,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103190313624039620",
+    "platform": "X",
+    "text": "jev + opus 5.5... i simply can't comprehend why everyone isn't building this yet.\n\nin my workflow, this cut costs and time by ~80%. i think it's one of the best ways to use it.\n\n→ pick relevant project notes before loading the context\n→ route suitable tasks to a faster worker\n→ choose a recovery path when a tool fails\n→ run focused checks before the full test suite\n\nopus handles the hard reasoning. jev picks from options the harness prepares and validates.\n\ni explain how to build the decision layer in the article below:",
+    "author": "Avid",
+    "handle": "@Av1dlive",
+    "url": "https://x.com/Av1dlive/status/2103190313624039620",
+    "domain": "x.com",
+    "published_at": "2026-09-24T18:30:20+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Lecturas",
+      "Ideas"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2103190200671485953/img/Q8ZGiufbFt9iiBAv.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "opus",
+        "reasoning"
+      ],
+      "Lecturas": [
+        "article"
+      ],
+      "Ideas": [
+        "workflow"
+      ]
+    },
+    "source": "@Av1dlive",
+    "media_status": "not_requested",
+    "confidence": 0.9299999999999999,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103078611783721444",
+    "platform": "X",
+    "text": "🎙️ ElevenLabs و WisprFlow في تطبيق واحد، مجاني ومفتوح المصدر، يعمل محلياً بالكامل على جهازك.\n\n مشروع حصل على أكثر من 55,000 نجمة على GitHub.\n\nماذا يقدم:\n1. استنساخ الصوت من عينة صوتية لا تتجاوز بضع ثواني، أو اختيار من أكثر من 50 صوت جاهز\n2. توليد كلام بـ 23 لغة عبر 7 محركات TTS مختلفة\n3. إملاء صوتي في أي حقل نص على جهازك بضغطة اختصار واحدة\n4. منح أي وكيل ذكاء اصطناعي مثل Claude Code صوت خاصاً به عبر MCP\n\nكل البيانات الصوتية تبقى على جهازك، لا شيء يُرفع لأي سيرفر خارجي.\n\nهذا يعني أن الخصوصية والتكلفة لم تعود سبب لتجنب استنساخ الصوت.\n\nجرّب: https://t.co/axHDskIdEw",
+    "author": "Snow Brave",
+    "handle": "@Sn0wbrave",
+    "url": "https://x.com/Sn0wbrave/status/2103078611783721444",
+    "domain": "x.com",
+    "published_at": "2026-09-24T11:06:29+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Programación"
+    ],
+    "language": "ar",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2103078532716859392/img/OPqeAW1wRotvi6j4.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "claude",
+        "mcp"
+      ],
+      "Programación": [
+        "code",
+        "github"
+      ]
+    },
+    "source": "@Sn0wbrave",
+    "media_status": "not_requested",
+    "confidence": 0.9299999999999999,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2102876912930488814",
+    "platform": "X",
+    "text": "YOU CAN NOW DROP RAW FOOTAGE IN A FOLDER, CHAT WITH CLAUDE CODE AND GET A FINISHED EDITED VIDEO BACK\n\nVideo-use cuts the umms and dead air, color grades every clip, burns in subtitles and adds animations, then checks its own work at every cut before showing you anything. MIT licensed, free. \n\nBookmark this.\n\nRepo: https://t.co/2GmfTpOFVC",
+    "author": "0xMarioNawfal",
+    "handle": "@RoundtableSpace",
+    "url": "https://x.com/RoundtableSpace/status/2102876912930488814",
+    "domain": "x.com",
+    "published_at": "2026-09-23T21:45:00+00:00",
+    "saved_at": "",
+    "content_type": "post",
+    "topics": [
+      "IA",
+      "Diseño",
+      "Programación",
+      "Cultura"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": false,
+    "media_urls": [],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "claude"
+      ],
+      "Diseño": [
+        "animations"
+      ],
+      "Programación": [
+        "code",
+        "repo"
+      ],
+      "Cultura": [
+        "video"
+      ]
+    },
+    "source": "@RoundtableSpace",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103095295215100189",
+    "platform": "X",
+    "text": "UN INGENIERO DE ANTHROPIC ACABA DE SOLTAR EL MEJOR TRUCO PARA OPUS 5.5\n\nAbre Claude Code y escribe:\n\n/claude-api prompt-audit\n\n→ Audita tus skills, CLAUDE.md y prompts \n→ Borra todo lo que frena al modelo\n→ Lo reescribe con la guía oficial de Opus 5.5\n\nTus prompts están escritos para modelos viejos.\n\nEsto lo arregla en 5 minutos.\n\nGuárdalo.\n\nPor: @RLanceMartin",
+    "author": "angel",
+    "handle": "@angeldot_",
+    "url": "https://x.com/angeldot_/status/2103095295215100189",
+    "domain": "x.com",
+    "published_at": "2026-09-24T12:12:46+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Programación",
+      "Lecturas"
+    ],
+    "language": "es",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2103095091598372864/img/u5iB1gUkZwy5LorS.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "claude",
+        "opus",
+        "prompts"
+      ],
+      "Programación": [
+        "code",
+        "api"
+      ],
+      "Lecturas": [
+        "guía"
+      ]
+    },
+    "source": "@angeldot_",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2103118152888361326",
+    "platform": "X",
+    "text": "🚨ADIÓS A LA EDICIÓN DE VIDEO\n\nAlguien acaba de crear una herramienta de edición de video gratuita para Claude Code... y es una locura.\n\nLiteralmente solo tienes que soltar tu material sin procesar + archivos en una carpeta.\n\nEso es todo.\n\nSe encarga de TODO:\n\n• Corta los clips\n• Elimina las palabras de relleno\n• Añade subtítulos\n• Aplica corrección de color y filtros\n• Maneja animaciones\n• Renderiza el video final\n\nSin línea de tiempo. Sin edición manual. Sin rodeos.\n\nHonestamente, esto va más allá de herramientas como Remotion.\n\nNo solo te ayuda a crear videos… hace la edición por ti.\n\nEl proyecto es open source en GitHub.\n\nSe llama Video Use.\n\nLink abajo👇",
+    "author": "roman",
+    "handle": "@Nozelcode",
+    "url": "https://x.com/Nozelcode/status/2103118152888361326",
+    "domain": "x.com",
+    "published_at": "2026-09-24T13:43:36+00:00",
+    "saved_at": "",
+    "content_type": "media",
+    "topics": [
+      "IA",
+      "Diseño",
+      "Programación",
+      "Cultura"
+    ],
+    "language": "es",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/media/HS_Gz_VWMAAVAZP.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "claude"
+      ],
+      "Diseño": [
+        "remotion"
+      ],
+      "Programación": [
+        "code",
+        "github",
+        "open source"
+      ],
+      "Cultura": [
+        "video"
+      ]
+    },
+    "source": "@Nozelcode",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2102012469010948513",
+    "platform": "X",
+    "text": "A Russian guy has discovered a method to learn anything ten times faster using AI!  It involves NotebookLM, Gemini and Obsidian. https://t.co/UOwuPkU5lH",
+    "author": "Dhairya Karekar",
+    "handle": "@dkare1009",
+    "url": "https://x.com/dkare1009/status/2102012469010948513",
+    "domain": "x.com",
+    "published_at": "2026-09-21T12:30:00+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2100445617847992321/img/3ZCxakX1vgvamAqY.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "ai",
+        "gemini"
+      ]
+    },
+    "source": "@dkare1009",
+    "media_status": "not_requested",
+    "confidence": 0.69,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2102371947749285972",
+    "platform": "X",
+    "text": "This is free f*cking gold for AI engineers..\n\n10 repos worth keeping, from Python basics all the way to LLMs, agents and production AI. \n\nForget the random tutorials.\n\n1. Python-100-Days -- 100 days through fundamentals, data analysis and web dev.\n↳ https://t.co/BsYdswSeut\n\n2. Generative AI for Beginners -- LLM basics, prompting, RAG, agents and fine-tuning.\n↳ https://t.co/k7FkU0cN17\n\n3. LLMs from Scratch -- build one yourself: tokenization, attention, transformers, training.\n↳ https://t.co/j3XuqnQou1\n\n4. ML for Beginners -- 26 lessons of classical ML across 12 weeks.\n↳ https://t.co/elQpAFtfSE\n\n5. OpenAI Cookbook -- working examples that take you from reading to building.\n↳ https://t.co/3sUauR5ga4\n\n6. Stable Diffusion -- the original implementation and the research code behind it.\n↳ https://t.co/uWItWzPSyX\n\n7. AI Agents for Beginners -- tool use, RAG, agent frameworks and multi-agent systems.\n↳ https://t.co/FyEFFjo8CI\n\n8. AI for Beginners -- 24 lessons over 12 weeks: neural nets, vision, NLP.\n↳ https://t.co/M0bMDdK6W2\n\n9. LLM App -- RAG pipelines, enterprise search, real-time data and vector search.\n↳ https://t.co/JYY5Ef76lF\n\n10. Segment Anything -- Meta's foundation model for image segmentation.\n↳ https://t.co/dzKZ7f9H8n\n\nStart from wherever you are:\n\n> Python -> Python-100-Days.\n> ML -> ML-For-Beginners.\n> LLMs -> LLMs-from-scratch.\n> Agents -> AI-Agents-for-Beginners.\n> Building -> OpenAI Cookbook, LLM App.\n> Vision -> Segment Anything.\n\nPick one, build something real with it, then move on to the next.",
+    "author": "the0xbt",
+    "handle": "@the0xbt",
+    "url": "https://x.com/the0xbt/status/2102371947749285972",
+    "domain": "github.com",
+    "published_at": "2026-09-22T12:18:27+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Programación"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2102356853359308800/img/9oK3NTVkLoHkI4gp.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "ai",
+        "llm",
+        "llms",
+        "agent",
+        "agents",
+        "openai",
+        "rag",
+        "neural",
+        "vector"
+      ],
+      "Programación": [
+        "code",
+        "dev",
+        "python",
+        "github",
+        "github.com"
+      ]
+    },
+    "source": "@the0xbt",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [
+      "https://github.com/jackfrued/Python-100-Days"
+    ],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2102392223161786775",
+    "platform": "X",
+    "text": "10 GITHUB REPOSITORIES THAT FEEL ALMOST ILLEGAL TO BE FREE\n\nAnd yes, they're all open source.\n\n1. Archify\nTurn codebases into architecture, workflow, sequence and data-flow diagrams with AI.\nhttps://t.co/3jLToYDzic\n\n2. OpenMAIC\nA multi-agent environment where AI agents can collaborate and work together.\nhttps://t.co/0g98VBKflm\n\n3. DeepSeek Harness\nAn open-source harness for building and running AI coding workflows.\nhttps://t.co/c45mNs83y6\n\n4. Ponytail\nA simple approach to helping AI coding agents write less unnecessary code.\nhttps://t.co/UdFeGXFvjL\n\n5. Agent Skills\nReusable skills that give AI coding agents more specialized capabilities.\nhttps://t.co/KkT71vIiR3\n\n6. OmniVoice Studio\nAn open-source studio for experimenting with AI voice generation workflows.\nhttps://t.co/zfiVHiHYWe\n\n7. Scientific Agent Skills\nSpecialized skills for AI agents working on scientific research and analysis.\nhttps://t.co/w8HCUPfmQ7\n\n8. Orca\nRun multiple AI coding agents in parallel inside one development environment.\nhttps://t.co/rINx3HgPEZ\n\n9. MiniMind\nA compact project for learning how language models work by building one yourself.\nhttps://t.co/sz3WQWSLQz\n\n10. God's Eye View\nA visual project exploring how AI can understand and represent complex systems.\nhttps://t.co/H7tiOUFLLu\n\nAll open source.\n\nSome are useful today.\nSome are worth studying.\nSome could become much bigger.\n\nBookmark this list for the weekend.",
+    "author": "Leonard Rodman",
+    "handle": "@RodmanAi",
+    "url": "https://x.com/RodmanAi/status/2102392223161786775",
+    "domain": "github.com",
+    "published_at": "2026-09-22T13:39:01+00:00",
+    "saved_at": "",
+    "content_type": "media",
+    "topics": [
+      "IA",
+      "Diseño",
+      "Programación",
+      "Ideas"
+    ],
+    "language": "en",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/media/HS0yd37acAEDgw_.png",
+      "https://pbs.twimg.com/media/HS0yfhTakAAyNQs.png"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "ai",
+        "agent",
+        "agents",
+        "deepseek"
+      ],
+      "Diseño": [
+        "visual"
+      ],
+      "Programación": [
+        "code",
+        "coding",
+        "github",
+        "github.com",
+        "open source"
+      ],
+      "Ideas": [
+        "workflow"
+      ]
+    },
+    "source": "@RodmanAi",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [
+      "https://github.com/tt-a1i/archify"
+    ],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2102004924410200237",
+    "platform": "X",
+    "text": "ESTO ES ORO PURO\n\nJack Dorsey acaba de abrir el código de buzz, una herramienta gratuita para gestionar un negocio de una sola persona.\n\nel repositorio en github ya suma 32.6k estrellas.\n\nte permite:\n\n→ correr tu propio servidor\n→ tener el chat, la búsqueda, git y la automatización en un solo lugar\n→ agregar agentes de ia que trabajan como parte del equipo\n→ decidir exactamente qué puede hacer cada agente\n\nsin suscripciones mensuales.\n\nsolo tú, tus agentes de ia y control total.\n\naquí es hacia donde van los negocios de una sola persona.\n\nguarda esto para después.",
+    "author": "SONIA",
+    "handle": "@S0N_IA",
+    "url": "https://x.com/S0N_IA/status/2102004924410200237",
+    "domain": "x.com",
+    "published_at": "2026-09-21T12:00:01+00:00",
+    "saved_at": "",
+    "content_type": "video",
+    "topics": [
+      "IA",
+      "Programación",
+      "Negocios"
+    ],
+    "language": "es",
+    "summary": "",
+    "has_media": true,
+    "media_urls": [
+      "https://pbs.twimg.com/amplify_video_thumb/2101879819659055104/img/TtSnnebisENFqelt.jpg"
+    ],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "ia",
+        "agente",
+        "agentes"
+      ],
+      "Programación": [
+        "código",
+        "github"
+      ],
+      "Negocios": [
+        "negocio",
+        "negocios"
+      ]
+    },
+    "source": "@S0N_IA",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [],
+    "media_paths": [],
+    "subtopics": []
+  },
+  {
+    "record_id": "x:2101831273224311035",
+    "platform": "X",
+    "text": "最近Jev爆火，拿到 Jev API 还不知道怎么玩的，可以按这个清单抄。\n\n1. jev-ultrafast\nBrowser Use 做的高速浏览器 Agent。Jev 每一步只判断「做什么、点哪个元素」，要打字才叫小模型。Google Flights 搜一次航班大约 7 秒。\nhttps://t.co/IBPb4LBRQh\n\n2. fast-jev-compaction\n给 Claude Code 做上下文压缩。每次工具调用先让 Jev 判断还有没有用，没用的删掉，留下来的原文不重写。\nhttps://t.co/qbPTr3TFTB\n\n3. json-render\nVercel Labs 的生成式 UI 框架。实验里 Jev 不逐 token 写 JSON，只负责选组件、属性和布局。\nhttps://t.co/iK0x89svV1\n\n4. typesafe-mcp\n最适合刚拿到 API 的人。把 Jev 接进 Claude Code、Claude Desktop、Codex 和 Pi，随时做 Choice / Score / Noul。\nhttps://t.co/XU16Z4xTNb\n\n5. jev-mcp\n现成的 Agent 判断工具箱：事实核验、内容筛查、语义排序、分类和信息提取。\nhttps://t.co/Ns9tNWB4st\n\n6. SemDecide\n把 Jev 做成命令行。Shell 里直接分类、打分、过滤，适合接爬虫、CI 和数据流水线。\nhttps://t.co/KvNFnjINNj\n\n7. jev-codex-router\n先让 Jev 判断这一轮编程任务有多难，再决定模型档位、推理深度和速度模式。\nhttps://t.co/XJWyrbzusf\n\n8. Winnow\n给 Claude Code 做上下文垃圾回收。Read / Bash / Grep 吐一大堆时，Jev 先判断哪些真和当前任务有关。\nhttps://t.co/cs8CtPcXq8\n\n9. jev-review\n代码审查前先过一遍 Jev，把高风险改动挑出来，再交给更贵的大模型或人。带本地看板。\nhttps://t.co/dW0nySEIp2\n\n10. Blink\n把 Jev 当代码库导航器。每走到一层目录，就判断哪些文件和当前问题最相关，再继续往下找。\nhttps://t.co/ZuOt4Yvpds\n\n11. agent-desktop\n桌面自动化。读系统无障碍树，判断下一步该点哪个按钮、菜单或输入框。\nhttps://t.co/uctY97plME\n\n12. typesafe-mario\n让 Jev 玩《超级马里奥》。不看截图，直接读模拟器 RAM 里的结构化状态，再决定跑、跳、躲。\nhttps://t.co/tzAGfK9BBE\n\n13. jev-drone\n拿 Jev 控无人机。底层飞控继续负责稳定和安全，Jev 只做爬升、刹车、穿越障碍这类上层判断。\nhttps://t.co/lRZ9LuWc3i\n\n14. OneVOneJev\n浏览器里的 1v1 FPS。每个决策 tick 都要判断走位、视角、瞄准、开火和跳跃。\nhttps://t.co/l4iHbyH9uU\n\n15. jev-trader\nMonad 测试网上做高频做市。Jev 根据价差和成交方向判断下一步买还是卖，模型延迟大约 81ms。\nhttps://t.co/tGAVNWR98u\n\n16. Prism\n不直接让 Jev 下单。它判断 toxic flow、市场压力、均值回归之类的状态，再交给原来的策略。\nhttps://t.co/LP0T9rDAWi\n\n17. neo4jev\n把 Jev 塞进知识图谱。每走到一个节点，判断下一条最值得走的边，再一路找下去。\nhttps://t.co/Qy1RUgi8oS\n\n18. jev-curate\n拿 Jev 筛训练数据。JSONL / Parquet 先做质量、相关性和风险判断，再决定哪些进后面的训练。\nhttps://t.co/ez9fXeTtEu\n\n19. Canny\n防 Coding Agent 嘴硬说自己做完了。看工具输出、代码 diff 和测试结果，再判断完成声明靠不靠谱。\nhttps://t.co/O3OQZ4NZ6Q\n\n20. killmyidea\n输入一个创业点子，Jev 从多个维度打分，最后给你 KILL、FIX 或 SHIP。\nhttps://t.co/pR4VkDrz54",
+    "author": "雪踏乌云",
+    "handle": "@Pluvio9yte",
+    "url": "https://x.com/Pluvio9yte/status/2101831273224311035",
+    "domain": "github.com",
+    "published_at": "2026-09-21T00:30:00+00:00",
+    "saved_at": "",
+    "content_type": "post",
+    "topics": [
+      "IA",
+      "Diseño",
+      "Programación",
+      "Lecturas"
+    ],
+    "language": "zh",
+    "summary": "",
+    "has_media": false,
+    "media_urls": [],
+    "capture_source": "chrome_har",
+    "raw_file": "data\\raw\\x\\x.com.initial.har",
+    "status": "captured",
+    "classification_status": "deterministic",
+    "classification_matches": {
+      "IA": [
+        "agent",
+        "claude",
+        "mcp"
+      ],
+      "Diseño": [
+        "ui"
+      ],
+      "Programación": [
+        "code",
+        "coding",
+        "github",
+        "github.com",
+        "api"
+      ],
+      "Lecturas": [
+        "read"
+      ]
+    },
+    "source": "@Pluvio9yte",
+    "media_status": "not_requested",
+    "confidence": 0.95,
+    "error": "",
+    "collections": [],
+    "entities": [],
+    "external_urls": [
+      "https://github.com/browser-use/jev-ultrafast"
+    ],
+    "media_paths": [],
+    "subtopics": []
+  }
+]
