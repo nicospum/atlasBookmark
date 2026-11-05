@@ -28,6 +28,9 @@ export async function GET(req: NextRequest) {
     const searchMode = (searchParams.get('searchMode') as 'exact' | 'semantic') || 'exact'
     const platform = (searchParams.get('platform') as any) || undefined
     const topic = searchParams.get('topic') || undefined
+    const resourceType = (searchParams.get('resourceType') as any) || undefined
+    const analysisState = (searchParams.get('analysisState') as any) || undefined
+    const hasGitHub = searchParams.get('hasGitHub') === 'true'
     const author = searchParams.get('author') || undefined
     const collection = searchParams.get('collection') || undefined
     const status = (searchParams.get('status') as any) || undefined
@@ -39,6 +42,9 @@ export async function GET(req: NextRequest) {
       searchMode,
       platform,
       topic,
+      resourceType,
+      analysisState,
+      hasGitHub,
       author,
       collection,
       status,
@@ -77,7 +83,7 @@ export async function POST(req: NextRequest) {
     if (rawList) {
       const normalizedItems: BookmarkItem[] = rawList
         .map((entry: any) => {
-          if (entry && entry.id && entry.sourceUrl && Array.isArray(entry.topics)) {
+          if (entry && entry.id && entry.sourceUrl && Array.isArray(entry.topics) && entry.title) {
             return entry as BookmarkItem
           }
           return normalizeRow(entry, body.filename || body.captureSource || 'browser_extension')
@@ -91,7 +97,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: true, ...result }, { headers: CORS_HEADERS })
     } else if (body.item) {
       const normalized =
-        body.item.id && body.item.sourceUrl && Array.isArray(body.item.topics)
+        body.item.id && body.item.sourceUrl && Array.isArray(body.item.topics) && body.item.title
           ? (body.item as BookmarkItem)
           : normalizeRow(body.item, 'manual')
       if (!normalized) {
@@ -123,6 +129,7 @@ export async function PUT(req: NextRequest) {
 
     const updatedCount = updateBookmarksBatch(body.ids, {
       ...(typeof body.reviewed === 'boolean' ? { reviewed: body.reviewed } : {}),
+      ...(typeof body.resourceType === 'string' ? { resourceType: body.resourceType } : {}),
       ...(Array.isArray(body.topics) ? { topics: body.topics, classificationStatus: 'manual' } : {})
     })
 

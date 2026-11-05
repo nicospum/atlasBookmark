@@ -33,6 +33,11 @@ export async function PUT(
 
     const updated = updateBookmark(decodedId, {
       ...(typeof body.reviewed === 'boolean' ? { reviewed: body.reviewed } : {}),
+      ...(typeof body.title === 'string' ? { title: body.title } : {}),
+      ...(typeof body.purpose === 'string' ? { purpose: body.purpose } : {}),
+      ...(typeof body.resourceType === 'string' ? { resourceType: body.resourceType } : {}),
+      ...(typeof body.evaluation === 'string' ? { evaluation: body.evaluation } : {}),
+      ...(typeof body.notes === 'string' ? { notes: body.notes } : {}),
       ...(Array.isArray(body.topics) ? { topics: body.topics, classificationStatus: 'manual' } : {}),
       ...(typeof body.aiSummary === 'string' ? { aiSummary: body.aiSummary } : {}),
       ...(Array.isArray(body.entities) ? { entities: body.entities } : {}),

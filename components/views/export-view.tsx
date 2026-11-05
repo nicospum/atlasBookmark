@@ -2,14 +2,22 @@
 
 import React, { useState, useMemo } from 'react'
 import {
-  FileSpreadsheet, Check, CloudDownload, Server, Sparkles
+  FileSpreadsheet, Check, CloudDownload, Server, FileText, FileJson, GitBranch as Github
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { BookmarkItem, ExportHistoryItem } from '@/lib/types'
-import { generateExcelFile, AVAILABLE_COLUMNS, ALL_SHEETS, getSheetRows } from '@/lib/excel-export'
+import {
+  generateExcelFile,
+  downloadCsvFile,
+  downloadJsonBackupFile,
+  TABLE_DEFAULT_COLUMNS,
+  AVAILABLE_COLUMNS,
+  ALL_SHEETS,
+  getSheetRows
+} from '@/lib/excel-export'
 
 interface ExportViewProps {
   items: BookmarkItem[]
@@ -18,19 +26,9 @@ interface ExportViewProps {
 export function ExportView({ items }: ExportViewProps) {
   const [selectedSheets, setSelectedSheets] = useState<string[]>([...ALL_SHEETS])
   const [activePreviewSheet, setActivePreviewSheet] = useState<string>('Todos')
-  const [selectedColumns, setSelectedColumns] = useState<string[]>([
-    'Texto completo',
-    'Autor',
-    'Handle / Usuario',
-    'Fuente',
-    'Fecha guardado',
-    'Temas',
-    'Colecciones',
-    'Resumen IA',
-    'Confianza',
-    'URL Original'
-  ])
+  const [selectedColumns, setSelectedColumns] = useState<string[]>([...TABLE_DEFAULT_COLUMNS])
   const [onlyReviewed, setOnlyReviewed] = useState(false)
+  const [onlyWithGitHub, setOnlyWithGitHub] = useState(false)
   const [isExporting, setIsExporting] = useState(false)
   const [exportHistory, setExportHistory] = useState<ExportHistoryItem[]>([
     {
@@ -67,10 +65,18 @@ export function ExportView({ items }: ExportViewProps) {
     }
   }
 
-  const eligibleItems = useMemo(
-    () => (onlyReviewed ? items.filter(i => i.reviewed) : items),
-    [items, onlyReviewed]
-  )
+  const eligibleItems = useMemo(() => {
+    return items.filter(i => {
+      if (onlyReviewed && !i.reviewed) return false
+      if (onlyWithGitHub) {
+        const hasGh =
+          (i.resources || []).some(r => Boolean(r.githubRepo)) ||
+          i.expandedUrls.some(u => u.toLowerCase().includes('github.com/'))
+        if (!hasGh) return false
+      }
+      return true
+    })
+  }, [items, onlyReviewed, onlyWithGitHub])
 
   const previewRows = useMemo(
     () => getSheetRows(eligibleItems, activePreviewSheet, selectedColumns),
@@ -82,6 +88,18 @@ export function ExportView({ items }: ExportViewProps) {
     [previewRows]
   )
 
+  const recordHistory = (filename: string, sheets: string[]) => {
+    const newHistoryItem: ExportHistoryItem = {
+      id: `exp-${Date.now()}`,
+      filename,
+      date: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' }),
+      sheets,
+      totalItems: eligibleItems.length,
+      sizeKb: Math.max(12, Math.round(eligibleItems.length * 1.8))
+    }
+    setExportHistory(prev => [newHistoryItem, ...prev])
+  }
+
   const handleDownloadExcel = () => {
     setIsExporting(true)
     try {
@@ -90,23 +108,37 @@ export function ExportView({ items }: ExportViewProps) {
         sheets: selectedSheets,
         columns: selectedColumns,
         filename,
-        onlyReviewed
+        onlyReviewed: false // ya filtrado en eligibleItems
       })
-
-      const newHistoryItem: ExportHistoryItem = {
-        id: `exp-${Date.now()}`,
-        filename,
-        date: new Date().toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' }),
-        sheets: [...selectedSheets],
-        totalItems: eligibleItems.length,
-        sizeKb: Math.max(12, Math.round(eligibleItems.length * 1.8))
-      }
-      setExportHistory([newHistoryItem, ...exportHistory])
+      recordHistory(filename, [...selectedSheets])
     } catch (err) {
       console.error('Error al exportar:', err)
       alert('Error al generar el archivo Excel.')
     } finally {
       setIsExporting(false)
+    }
+  }
+
+  const handleDownloadCsv = () => {
+    try {
+      const filename = `atlas-guardados-${new Date().toISOString().slice(0, 10)}.csv`
+      downloadCsvFile(eligibleItems, {
+        columns: selectedColumns,
+        filename
+      })
+      recordHistory(filename, ['CSV (Tabla principal)'])
+    } catch (err) {
+      console.error('Error al exportar CSV:', err)
+    }
+  }
+
+  const handleDownloadJsonBackup = () => {
+    try {
+      const filename = `atlas-backup-v2-${new Date().toISOString().slice(0, 10)}.json`
+      downloadJsonBackupFile(eligibleItems, filename)
+      recordHistory(filename, ['JSON Backup v2 (Reimportable)'])
+    } catch (err) {
+      console.error('Error al exportar respaldo JSON:', err)
     }
   }
 
@@ -118,15 +150,16 @@ export function ExportView({ items }: ExportViewProps) {
     <div className="flex flex-col gap-7">
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-[#8e83f2]">Salida de Datos Verificada (6 Hojas)</p>
+          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-[#8e83f2]">
+            Salida de Datos Coherente con la Tabla (Excel · CSV · Respaldo JSON v2)
+          </p>
           <h1 className="font-serif text-3xl sm:text-4xl tracking-[-0.04em] text-foreground">
-            Exportar Archivo a Excel (.xlsx)
+            Exportar y Respaldar Colección
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Genera un libro de Excel completo con pestañas <code className="text-[#bfb8ff]">Resumen</code>,{' '}
-            <code className="text-[#bfb8ff]">Todos</code>, <code className="text-[#bfb8ff]">Por tema</code>,{' '}
-            <code className="text-[#bfb8ff]">Por fuente</code>, <code className="text-[#bfb8ff]">Errores</code> y{' '}
-            <code className="text-[#bfb8ff]">Manifest</code>.
+            Conserva exactamente las mismas columnas visibles en la Biblioteca (<code className="text-[#bfb8ff]">Nombre / recurso</code>,{' '}
+            <code className="text-[#bfb8ff]">Para qué sirve</code>, <code className="text-[#bfb8ff]">Tipo</code>,{' '}
+            <code className="text-[#bfb8ff]">Enlaces útiles</code>, <code className="text-[#bfb8ff]">Evaluación breve</code>) o genera un respaldo JSON reimportable sin pérdida.
           </p>
         </div>
 
@@ -146,7 +179,7 @@ export function ExportView({ items }: ExportViewProps) {
           <CardHeader>
             <CardTitle className="text-base">Configura tu exportación</CardTitle>
             <CardDescription>
-              Selecciona las hojas y columnas que contendrá el archivo descargable
+              Por defecto coincide con las 8 columnas principales de la tabla en la aplicación
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-6">
@@ -184,16 +217,24 @@ export function ExportView({ items }: ExportViewProps) {
 
             {/* Columnas */}
             <div>
-              <div className="mb-3 flex items-center justify-between">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  Columnas incluidas en “Todos” ({selectedColumns.length} de {AVAILABLE_COLUMNS.length})
+                  Columnas incluidas en “Todos” y CSV ({selectedColumns.length} de {AVAILABLE_COLUMNS.length})
                 </p>
-                <button
-                  onClick={() => setSelectedColumns([...AVAILABLE_COLUMNS])}
-                  className="text-[11px] text-[#a59cf5] hover:underline"
-                >
-                  Seleccionar todas
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setSelectedColumns([...TABLE_DEFAULT_COLUMNS])}
+                    className="text-[11px] text-[#91d0b4] hover:underline"
+                  >
+                    8 columnas de la tabla
+                  </button>
+                  <button
+                    onClick={() => setSelectedColumns([...AVAILABLE_COLUMNS])}
+                    className="text-[11px] text-[#a59cf5] hover:underline"
+                  >
+                    Seleccionar todas ({AVAILABLE_COLUMNS.length})
+                  </button>
+                </div>
               </div>
 
               <div className="flex flex-wrap gap-1.5">
@@ -218,8 +259,23 @@ export function ExportView({ items }: ExportViewProps) {
               </div>
             </div>
 
-            {/* Filtros */}
-            <div className="flex flex-col gap-2 rounded-md border border-border bg-[#1b1d25] p-3 text-xs">
+            {/* Filtros de alcance */}
+            <div className="flex flex-col gap-2.5 rounded-md border border-border bg-[#1b1d25] p-3.5 text-xs">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Alcance de registros a incluir
+              </p>
+              <label className="flex cursor-pointer items-center gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={onlyWithGitHub}
+                  onChange={e => setOnlyWithGitHub(e.target.checked)}
+                  className="accent-[#7c6cf0]"
+                />
+                <span className="flex items-center gap-1.5">
+                  <Github className="size-3.5 text-[#91d0b4]" />
+                  Exportar solo guardados con repositorio de GitHub detectado
+                </span>
+              </label>
               <label className="flex cursor-pointer items-center gap-2.5">
                 <input
                   type="checkbox"
@@ -229,23 +285,43 @@ export function ExportView({ items }: ExportViewProps) {
                 />
                 <span>Exportar únicamente elementos marcados como “Revisado”</span>
               </label>
-              <p className="text-[11px] text-muted-foreground pl-6">
-                Total a exportar: <strong>{eligibleItems.length}</strong> guardados ·{' '}
-                <strong>{selectedSheets.length}</strong> pestañas
+              <p className="text-[11px] text-muted-foreground pt-1 border-t border-border/60">
+                Total seleccionado: <strong className="text-foreground">{eligibleItems.length}</strong> de {items.length} guardados ·{' '}
+                <strong className="text-foreground">{selectedColumns.length}</strong> columnas
               </p>
             </div>
 
-            {/* Botón Descargar */}
-            <Button
-              onClick={handleDownloadExcel}
-              disabled={isExporting || eligibleItems.length === 0}
-              className="w-full bg-[#7c6cf0] py-5 text-sm font-medium text-white shadow-lg shadow-[#7c6cf0]/20 hover:bg-[#6f60dc]"
-            >
-              <FileSpreadsheet className="size-4 mr-2" />
-              {isExporting
-                ? 'Generando archivo Excel...'
-                : `Descargar .xlsx (${eligibleItems.length} registros · ${selectedSheets.length} hojas)`}
-            </Button>
+            {/* Botones de Descarga */}
+            <div className="grid gap-2.5 sm:grid-cols-3">
+              <Button
+                onClick={handleDownloadExcel}
+                disabled={isExporting || eligibleItems.length === 0}
+                className="bg-[#7c6cf0] py-5 text-xs font-medium text-white shadow-lg shadow-[#7c6cf0]/20 hover:bg-[#6f60dc]"
+              >
+                <FileSpreadsheet className="size-4 mr-1.5" />
+                {isExporting ? 'Generando...' : `Excel .xlsx (${eligibleItems.length})`}
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={handleDownloadCsv}
+                disabled={eligibleItems.length === 0}
+                className="border-[#35314f] bg-[#1a1b26] py-5 text-xs text-[#bfb8ff] hover:bg-[#252438]"
+              >
+                <FileText className="size-4 mr-1.5 text-[#91d0b4]" />
+                CSV compatible ({eligibleItems.length})
+              </Button>
+
+              <Button
+                variant="outline"
+                onClick={handleDownloadJsonBackup}
+                disabled={eligibleItems.length === 0}
+                className="border-[#35314f] bg-[#1a1b26] py-5 text-xs text-[#e3c08d] hover:bg-[#252438]"
+              >
+                <FileJson className="size-4 mr-1.5 text-[#e3c08d]" />
+                Respaldo JSON v2 ({eligibleItems.length})
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -278,27 +354,27 @@ export function ExportView({ items }: ExportViewProps) {
               <Table>
                 <TableHeader className="bg-[#121318]">
                   <TableRow className="border-border">
-                    {previewKeys.slice(0, 4).map(k => (
+                    {previewKeys.slice(0, 6).map(k => (
                       <TableHead key={k} className="text-xs whitespace-nowrap">
                         {k}
                       </TableHead>
                     ))}
-                    {previewKeys.length > 4 && (
+                    {previewKeys.length > 6 && (
                       <TableHead className="text-xs text-muted-foreground whitespace-nowrap">
-                        +{previewKeys.length - 4} más
+                        +{previewKeys.length - 6} más
                       </TableHead>
                     )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {previewRows.slice(0, 6).map((row, idx) => (
+                  {previewRows.slice(0, 8).map((row, idx) => (
                     <TableRow key={idx} className="border-border">
-                      {previewKeys.slice(0, 4).map(k => (
-                        <TableCell key={k} className="max-w-[160px] truncate text-xs">
+                      {previewKeys.slice(0, 6).map(k => (
+                        <TableCell key={k} className="max-w-[180px] truncate text-xs" title={String(row[k] ?? '')}>
                           {String(row[k] ?? '')}
                         </TableCell>
                       ))}
-                      {previewKeys.length > 4 && (
+                      {previewKeys.length > 6 && (
                         <TableCell className="text-[11px] text-muted-foreground">...</TableCell>
                       )}
                     </TableRow>
@@ -307,7 +383,7 @@ export function ExportView({ items }: ExportViewProps) {
               </Table>
             </div>
             <p className="mt-3 text-center text-[11px] text-muted-foreground">
-              Mostrando {Math.min(6, previewRows.length)} de {previewRows.length} filas en la hoja “{activePreviewSheet}”
+              Mostrando {Math.min(8, previewRows.length)} de {previewRows.length} filas en la hoja “{activePreviewSheet}”
             </p>
           </CardContent>
         </Card>
@@ -337,7 +413,7 @@ export function ExportView({ items }: ExportViewProps) {
                 onClick={handleDownloadExcel}
                 className="text-xs text-[#a59cf5] hover:bg-[#252836]"
               >
-                <CloudDownload className="size-3.5 mr-1" /> Re-descargar
+                <CloudDownload className="size-3.5 mr-1" /> Re-descargar .xlsx
               </Button>
             </div>
           ))}

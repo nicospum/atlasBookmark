@@ -1,8 +1,66 @@
-export type SourcePlatform = 'x' | 'instagram'
+export type SourcePlatform = 'x' | 'instagram' | 'whatsapp'
 
-export type AnalysisMethod = 'rules' | 'gemini' | 'ollama' | 'manual'
+export type AnalysisMethod = 'rules' | 'gemini' | 'ollama' | 'manual' | 'investigator'
 export type ClassificationStatus = 'deterministic' | 'manual' | 'llm' | 'pending'
 export type ContentStatus = 'text' | 'link-only'
+
+export type ResourceType =
+  | 'Aplicación o herramienta'
+  | 'Librería, framework o SDK'
+  | 'Skill'
+  | 'Servidor MCP o conector'
+  | 'Agente o workflow'
+  | 'Modelo o dataset'
+  | 'Artículo, tutorial, investigación o material educativo'
+  | 'Idea o proyecto'
+  | 'Otro / pendiente de clasificar'
+
+export type AnalysisState = 'pending' | 'partial' | 'completed' | 'error'
+
+export type VerificationStatus =
+  | 'uninvestigated'
+  | 'confirmed'
+  | 'candidate'
+  | 'not_found'
+  | 'inaccessible'
+  | 'error'
+
+export type LinkedResourceKind =
+  | 'github_repo'
+  | 'github_other'
+  | 'docs'
+  | 'webapp'
+  | 'article'
+  | 'video'
+  | 'other'
+
+export interface LinkedResource {
+  id: string
+  url: string
+  resolvedUrl: string
+  domain: string
+  kind: LinkedResourceKind
+  name: string
+  fullName?: string
+  description: string
+  purpose: string
+  resourceType: ResourceType
+  topics: string[]
+  howToUse?: string
+  hasDocs?: boolean
+  hasExamples?: boolean
+  maintenanceStatus?: 'activo' | 'archivado' | 'desconocido'
+  license?: string
+  stars?: number
+  archived?: boolean
+  limitations?: string
+  evaluation?: string
+  verificationStatus: VerificationStatus
+  verifiedAt?: string
+  provenanceChain: string[]
+  evidenceBasis: 'post_text' | 'har_metadata' | 'http_metadata' | 'github_api' | 'manual'
+  error?: string
+}
 
 export interface BookmarkItem {
   id: string
@@ -16,6 +74,24 @@ export interface BookmarkItem {
   savedAt: string
   importedAt?: string
   caption: string
+  /** Comprehensible short name of the resource, tool, repo, or post subject */
+  title?: string
+  /** Concrete 1-2 sentence explanation of what it is for ("Para qué sirve") */
+  purpose?: string
+  /** Canonical resource type taxonomy ("Tipo") */
+  resourceType?: ResourceType
+  /** Brief utility + main limitation ("Evaluación breve") */
+  evaluation?: string
+  /** Current state of the analysis & link investigation ("Estado del análisis") */
+  analysisState?: AnalysisState
+  /** User personal notes (protected across re-imports and re-analysis) */
+  notes?: string
+  /** Linked external resources (GitHub repos, docs, apps, articles) */
+  resources?: LinkedResource[]
+  /** Fields manually edited by the user that must not be overwritten automatically */
+  manualFields?: string[]
+  /** Batch ID of the import event that created this bookmark */
+  importBatchId?: string
   contentType?: string
   collections?: string[]
   topics: string[]
@@ -63,6 +139,7 @@ export interface ExportHistoryItem {
   sheets: string[]
   totalItems: number
   sizeKb: number
+  format?: 'xlsx' | 'csv' | 'json'
 }
 
 export interface CaptureLog {
@@ -71,6 +148,30 @@ export interface CaptureLog {
   platform: SourcePlatform
   type: 'info' | 'success' | 'duplicate' | 'error'
   message: string
+}
+
+export type ImportDiagnosticCase =
+  | 'ok'
+  | 'empty_file'
+  | 'invalid_json'
+  | 'har_no_bookmark_responses'
+  | 'har_empty_bodies'
+  | 'no_items_found'
+  | 'write_error'
+
+export interface ImportStageMetrics {
+  networkEntries: number
+  recognizedResponses: number
+  emptyBodyResponses: number
+  incidentalSkipped: number
+  detectedItems: number
+  added: number
+  updated: number
+  duplicates: number
+  errors: number
+  persistedTotal: number
+  diagnosticCase: ImportDiagnosticCase
+  diagnosticHint?: string
 }
 
 export interface ImportResult {
@@ -82,6 +183,7 @@ export interface ImportResult {
   messages: string[]
   filename?: string
   captureSource?: string
+  stages?: ImportStageMetrics
 }
 
 export interface ImportHistoryEntry {
@@ -107,3 +209,20 @@ export interface TopicRulesMeta {
   backupUpdatedAt?: string
 }
 
+export interface StorageDiagnostics {
+  mode: 'local_persistent' | 'cloud_ephemeral'
+  platformEnv: 'local' | 'vercel' | 'netlify'
+  dbPath: string
+  writable: boolean
+  totalBookmarks: number
+  totalResourcesCached: number
+}
+
+export interface WhatsAppParsedMessage {
+  id: string
+  timestamp: string
+  sender: string
+  text: string
+  urls: string[]
+  hasLinks: boolean
+}

@@ -8,11 +8,15 @@ tsconfig.tsbuildinfo
 .env.*
 .env*.local
 
-# Raw captures & browser profiles (never commit raw HARs or session profiles)
+# Raw captures, backups & browser profiles (never commit raw HARs or session profiles)
+*.har
+*.bak
 data/raw/
 data/media/
+data/normalized/backups/
 data/*.db-shm
 data/*.db-wal
+atlas-seleccionados-*.xlsx
 .playwright-profile/
 .atlas_browser_profile/
 

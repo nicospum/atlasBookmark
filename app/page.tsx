@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import {
-  Archive, Menu, Search, RefreshCw
+  Archive, Menu, Search, RefreshCw, AlertTriangle
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -14,12 +14,14 @@ import { TopicsView } from '@/components/views/topics-view'
 import { SourcesView } from '@/components/views/sources-view'
 import { ExportView } from '@/components/views/export-view'
 import { CaptureView } from '@/components/views/capture-view'
-import { BookmarkItem, ImportHistoryEntry } from '@/lib/types'
+import { BookmarkItem, ImportHistoryEntry, StorageDiagnostics } from '@/lib/types'
 
 export default function AtlasApp() {
   const [active, setActive] = useState('Resumen')
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([])
   const [importHistory, setImportHistory] = useState<ImportHistoryEntry[]>([])
+  const [storageDiag, setStorageDiag] = useState<StorageDiagnostics | null>(null)
+  const [apiError, setApiError] = useState<string | null>(null)
   const [selectedDetailItem, setSelectedDetailItem] = useState<BookmarkItem | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -29,23 +31,46 @@ export default function AtlasApp() {
 
   // Fetch bookmarks & history from SQLite API
   const refreshBookmarks = useCallback(async () => {
+    setIsLoading(true)
+    setApiError(null)
     try {
       const res = await fetch('/api/bookmarks')
-      if (res.ok) {
-        const data = await res.json()
+      const data = await res.json().catch(() => null)
+      if (res.ok && data) {
         if (data.success && Array.isArray(data.items)) {
           setBookmarks(data.items)
           setSelectedDetailItem(prev => {
             if (!prev) return null
             return data.items.find((b: BookmarkItem) => b.id === prev.id) || prev
           })
+          // Guardar snapshot de seguridad en el navegador por si el entorno en nube es efímero
+          if (typeof window !== 'undefined' && data.items.length > 0) {
+            try {
+              localStorage.setItem(
+                'atlas_browser_backup_v2',
+                JSON.stringify({
+                  savedAt: new Date().toISOString(),
+                  count: data.items.length,
+                  items: data.items.slice(0, 250)
+                })
+              )
+            } catch {
+              // Ignorar límite de cuota de localStorage
+            }
+          }
         }
         if (Array.isArray(data.history)) {
           setImportHistory(data.history)
         }
+        if (data.stats?.storage) {
+          setStorageDiag(data.stats.storage)
+        }
+      } else {
+        setApiError(data?.error || `Error HTTP ${res.status} al consultar /api/bookmarks`)
       }
     } catch (e) {
       console.error('Error cargando bookmarks de SQLite:', e)
+      setApiError('No se pudo conectar con /api/bookmarks. Verifica el servidor local.')
     } finally {
       setIsLoading(false)
     }
@@ -292,14 +317,14 @@ export default function AtlasApp() {
           )}
 
           {/* Barra superior de navegación / migas */}
-          <div className="mb-8 flex items-center justify-between border-b border-border pb-4">
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span className="text-foreground">Archivo Unificado Legacy</span>
               <span>/</span>
               <span className="text-[#8e83f2] font-medium">{active}</span>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 variant="ghost"
                 size="xs"
@@ -320,13 +345,56 @@ export default function AtlasApp() {
 
               <Badge
                 variant="outline"
-                className="gap-1.5 border-[#35314f] bg-[#161822] text-[#a59cf5] text-xs font-normal"
+                title={storageDiag?.warning || 'Base de datos SQLite local persistente sincronizada con archive.json'}
+                className={`gap-1.5 text-xs font-normal ${
+                  storageDiag?.isEphemeralFallback
+                    ? 'border-[#5a4822] bg-[#241e14] text-[#e3c08d]'
+                    : 'border-[#35314f] bg-[#161822] text-[#a59cf5]'
+                }`}
               >
-                <span className="size-1.5 rounded-full bg-[#91d0b4]" />
-                <span>SQLite: atlas.db · {bookmarks.length} guardados</span>
+                <span
+                  className={`size-1.5 rounded-full ${
+                    storageDiag?.isEphemeralFallback ? 'bg-[#e3c08d]' : 'bg-[#91d0b4]'
+                  }`}
+                />
+                <span>
+                  {storageDiag?.isEphemeralFallback
+                    ? `SQLite Efímero (/tmp) · ${bookmarks.length} guardados`
+                    : `SQLite Local: atlas.db · ${bookmarks.length} guardados`}
+                </span>
               </Badge>
             </div>
           </div>
+
+          {/* Aviso de error de API o almacenamiento efímero */}
+          {apiError && (
+            <div className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-red-500/40 bg-red-950/30 px-4 py-3 text-xs text-red-200">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="size-4 shrink-0 text-red-400" />
+                <span>{apiError}</span>
+              </div>
+              <Button size="xs" variant="outline" onClick={refreshBookmarks}>
+                Reintentar
+              </Button>
+            </div>
+          )}
+
+          {storageDiag?.isEphemeralFallback && storageDiag.warning && (
+            <div className="mb-6 flex items-center justify-between gap-3 rounded-lg border border-[#5a4822] bg-[#241e14] px-4 py-2.5 text-xs text-[#e3c08d]">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="size-4 shrink-0" />
+                <span>{storageDiag.warning}</span>
+              </div>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => setActive('Exportar')}
+                className="border-[#5a4822] text-xs text-[#e3c08d]"
+              >
+                Descargar Respaldo
+              </Button>
+            </div>
+          )}
 
           {/* Renderizado de vistas */}
           {active === 'Resumen' && (
@@ -347,6 +415,7 @@ export default function AtlasApp() {
               onDelete={handleDeleteBookmark}
               onBulkUpdateReviewed={handleBulkUpdateReviewed}
               onBulkDelete={handleBulkDelete}
+              onRefresh={refreshBookmarks}
               externalTopicFilter={selectedTopicFilter}
               externalAuthorFilter={selectedAuthorFilter}
               onClearExternalFilters={() => {

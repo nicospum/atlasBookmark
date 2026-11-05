@@ -20,7 +20,15 @@ require.extensions['.ts'] = (module, filename) => {
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-tests-'))
 process.env.ATLAS_DATA_DIR = temp
 
-const { parseImportText, canonicalUrl, normalizeRow } = require('../lib/importer.ts')
+const {
+  parseImportText,
+  extractFromHarWithMetrics,
+  canonicalUrl,
+  normalizeRow,
+  sanitizeHarJsonString,
+  parseWhatsAppChatText,
+  whatsAppMessagesToRows
+} = require('../lib/importer.ts')
 const {
   analyzeContent,
   getTopicRulesMeta,
@@ -29,22 +37,330 @@ const {
   semanticSearchBookmarks
 } = require('../lib/ai-analyzer.ts')
 const {
+  isSafeExternalUrl,
+  classifyGitHubUrl
+} = require('../lib/resource-investigator.ts')
+const {
   getAllBookmarks,
   getBookmarkById,
   insertBookmarksBatch,
+  updateBookmark,
   updateBookmarksBatch,
   reclassifyAllBookmarks
 } = require('../lib/bookmarks-repository.ts')
 const { db } = require('../lib/db.ts')
-const { buildWorkbook, AVAILABLE_COLUMNS, ALL_SHEETS } = require('../lib/excel-export.ts')
+const {
+  buildWorkbook,
+  generateCsvString,
+  buildJsonBackupV2,
+  TABLE_DEFAULT_COLUMNS,
+  AVAILABLE_COLUMNS,
+  ALL_SHEETS
+} = require('../lib/excel-export.ts')
 const XLSX = require('xlsx')
 
-test('canonical URLs and malicious host rejection', () => {
+test('canonical URLs, WhatsApp internal URIs and malicious host rejection', () => {
   assert.equal(canonicalUrl('https://twitter.com/alice/status/123?s=20').url, 'https://x.com/alice/status/123')
   assert.equal(canonicalUrl('https://www.instagram.com/reel/AbC_1/?igsh=x').url, 'https://www.instagram.com/reel/AbC_1/')
+  assert.equal(canonicalUrl('whatsapp://message/abc123def456').platform, 'whatsapp')
+  assert.equal(canonicalUrl('whatsapp://message/abc123def456').key, 'abc123def456')
   assert.equal(canonicalUrl('https://x.com.evil.example/a/status/123'), null)
   assert.equal(canonicalUrl('javascript:alert(1)'), null)
   assert.equal(canonicalUrl('https://x.com/alice'), null)
+})
+
+test('SSRF protection blocks localhost, private IPs and cloud metadata endpoints', () => {
+  assert.equal(isSafeExternalUrl('https://github.com/pbakaus/impeccable'), true)
+  assert.equal(isSafeExternalUrl('http://localhost:3000/api'), false)
+  assert.equal(isSafeExternalUrl('http://127.0.0.1:8080/secret'), false)
+  assert.equal(isSafeExternalUrl('http://192.168.1.10/admin'), false)
+  assert.equal(isSafeExternalUrl('http://10.0.0.5/internal'), false)
+  assert.equal(isSafeExternalUrl('http://169.254.169.254/latest/meta-data/'), false)
+  assert.equal(isSafeExternalUrl('file:///etc/passwd'), false)
+
+  const ghRepo = classifyGitHubUrl('https://github.com/pbakaus/impeccable/tree/main/src')
+  assert.equal(ghRepo.kind, 'github_repo')
+  assert.equal(ghRepo.fullName, 'pbakaus/impeccable')
+  assert.equal(classifyGitHubUrl('https://github.com/trending').kind, 'github_other')
+  assert.equal(classifyGitHubUrl('https://github.com/pbakaus').kind, 'github_other')
+})
+
+test('HAR capture extraction: base64 GraphQL Bookmarks, X Article, GitHub Card, Quoted Tweet & noise filtering', () => {
+  const graphqlPayload = {
+    data: {
+      bookmark_timeline_v2: {
+        timeline: {
+          instructions: [
+            {
+              type: 'TimelineAddEntries',
+              entries: [
+                {
+                  entryId: 'tweet-2001',
+                  sortIndex: '100',
+                  content: {
+                    entryType: 'TimelineTimelineItem',
+                    itemContent: {
+                      tweet_results: {
+                        result: {
+                          __typename: 'Tweet',
+                          rest_id: '2001',
+                          core: {
+                            user_results: {
+                              result: {
+                                core: { name: 'Paul Bakaus', screen_name: 'pbakaus' }
+                              }
+                            }
+                          },
+                          legacy: {
+                            id_str: '2001',
+                            full_text: 'Lanzamos Impeccable para Claude Code y Cursor https://t.co/xyz',
+                            created_at: 'Wed Nov 04 12:00:00 +0000 2026',
+                            entities: {
+                              urls: [{ expanded_url: 'https://impeccable.style' }]
+                            }
+                          },
+                          card: {
+                            legacy: {
+                              binding_values: [
+                                { key: 'title', value: { string_value: 'GitHub - pbakaus/impeccable: Design skill package for AI agents' } },
+                                { key: 'description', value: { string_value: '18 design skills and commands for Claude Code, Cursor and Gemini CLI.' } },
+                                { key: 'card_url', value: { string_value: 'https://github.com/pbakaus/impeccable' } }
+                              ]
+                            }
+                          },
+                          quoted_status_result: {
+                            result: {
+                              __typename: 'Tweet',
+                              rest_id: '1999',
+                              core: {
+                                user_results: {
+                                  result: {
+                                    core: { name: 'Quoted Dev', screen_name: 'quoteddev' }
+                                  }
+                                }
+                              },
+                              legacy: {
+                                id_str: '1999',
+                                full_text: 'Contexto citado sobre https://github.com/pbakaus/impeccable',
+                                entities: {
+                                  urls: [{ expanded_url: 'https://github.com/pbakaus/impeccable' }]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  entryId: 'SidebarUserRecommendations-99',
+                  content: {
+                    itemContent: {
+                      tweet_results: {
+                        result: {
+                          __typename: 'Tweet',
+                          rest_id: '8888',
+                          legacy: { id_str: '8888', full_text: 'Ruido incidental que no debe importarse' }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  entryId: 'cursor-bottom-1',
+                  content: { value: 'abc' }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+
+  const base64Body = Buffer.from(JSON.stringify(graphqlPayload), 'utf8').toString('base64')
+  const har = {
+    log: {
+      entries: [
+        {
+          request: {
+            url: 'https://x.com/i/api/graphql/abc123/Bookmarks?variables=%7B%7D',
+            headers: [
+              { name: 'Cookie', value: 'auth_token=secret123' },
+              { name: 'Authorization', value: 'Bearer secret' }
+            ]
+          },
+          response: {
+            status: 200,
+            content: {
+              mimeType: 'application/json',
+              encoding: 'base64',
+              text: base64Body
+            }
+          }
+        }
+      ]
+    }
+  }
+
+  // Sanitize HAR strips cookies and authorization headers
+  const sanitized = JSON.parse(sanitizeHarJsonString(JSON.stringify(har)))
+  assert.equal(sanitized.log.entries[0].request.headers.length, 0)
+
+  const parsed = parseImportText(JSON.stringify(har), 'capture.har')
+  assert.equal(parsed.stages.networkEntries, 1)
+  assert.equal(parsed.stages.recognizedResponses, 1)
+  assert.equal(parsed.stages.incidentalSkipped, 2) // SidebarUserRecommendations + cursor
+  assert.equal(parsed.items.length, 1) // Only top-level tweet-2001, NOT quoted tweet 1999 or noise 8888
+
+  const item = parsed.items[0]
+  assert.equal(item.id, 'x:2001')
+  assert.ok(item.outgoingLinks.includes('https://github.com/pbakaus/impeccable'))
+  assert.ok(item.caption.includes('pbakaus/impeccable'))
+  assert.ok(item.caption.includes('@quoteddev'))
+  assert.match(item.title, /^pbakaus\/impeccable/)
+  assert.ok(item.resources.some(r => r.fullName === 'pbakaus/impeccable'))
+})
+
+test('HAR diagnostic errors for empty file, invalid JSON, 0 Bookmarks endpoints, and empty bodies', () => {
+  assert.throws(() => parseImportText('   ', 'empty.har'), /0 bytes/i)
+
+  const noEndpointsHar = {
+    log: {
+      entries: [
+        {
+          request: { url: 'https://video.twimg.com/ext_tw_video/123.mp4' },
+          response: { status: 200, content: { mimeType: 'video/mp4', text: '' } }
+        }
+      ]
+    }
+  }
+  const noEpRes = extractFromHarWithMetrics(noEndpointsHar, 'video_only.har')
+  assert.equal(noEpRes.metrics.diagnosticCase, 'har_no_bookmark_responses')
+  assert.equal(noEpRes.rows.length, 0)
+
+  const emptyBodyHar = {
+    log: {
+      entries: [
+        {
+          request: { url: 'https://x.com/i/api/graphql/xyz/Bookmarks' },
+          response: { status: 200, content: { mimeType: 'application/json', text: '' } }
+        }
+      ]
+    }
+  }
+  const emptyBodyRes = extractFromHarWithMetrics(emptyBodyHar, 'empty_body.har')
+  assert.equal(emptyBodyRes.metrics.diagnosticCase, 'har_empty_bodies')
+  assert.equal(emptyBodyRes.metrics.emptyBodyResponses, 1)
+})
+
+test('Two bookmarks referencing the same GitHub repository preserve both posts and share resource metadata', () => {
+  const postA = normalizeRow(
+    {
+      url: 'https://x.com/dev1/status/3001',
+      authorName: 'Dev Uno',
+      authorHandle: '@dev1',
+      caption: 'Cómo uso https://github.com/pbakaus/impeccable para auditar UI en Cursor'
+    },
+    'postA.json'
+  )
+  const postB = normalizeRow(
+    {
+      url: 'https://x.com/dev2/status/3002',
+      authorName: 'Dev Dos',
+      authorHandle: '@dev2',
+      caption: 'Comparativa de skills de diseño con https://github.com/pbakaus/impeccable en Claude Code'
+    },
+    'postB.json'
+  )
+
+  const res = insertBookmarksBatch([postA, postB])
+  assert.equal(res.added, 2)
+
+  const savedA = getBookmarkById('x:3001')
+  const savedB = getBookmarkById('x:3002')
+  assert.ok(savedA && savedB)
+  assert.notEqual(savedA.id, savedB.id)
+  assert.match(savedA.caption, /auditar UI en Cursor/)
+  assert.match(savedB.caption, /Comparativa de skills/)
+  assert.equal(savedA.resources[0].fullName, 'pbakaus/impeccable')
+  assert.equal(savedB.resources[0].fullName, 'pbakaus/impeccable')
+})
+
+test('Manual edits on title, purpose, resourceType, evaluation and notes are protected across re-import and reclassify', () => {
+  const initial = normalizeRow(
+    {
+      url: 'https://x.com/alice/status/4001',
+      caption: 'Librería experimental para agentes con https://github.com/acme/agent-kit'
+    },
+    'init.json'
+  )
+  insertBookmarksBatch([initial])
+
+  const edited = updateBookmark('x:4001', {
+    title: 'Mi Título Curado Manualmente',
+    purpose: 'Mi explicación manual de para qué sirve este kit.',
+    resourceType: 'Agente o workflow',
+    notes: 'Revisar el fin de semana para integrarlo.',
+    topics: ['IA', 'Agentes IA']
+  })
+
+  assert.equal(edited.title, 'Mi Título Curado Manualmente')
+  assert.equal(edited.notes, 'Revisar el fin de semana para integrarlo.')
+  assert.equal(edited.classificationStatus, 'manual')
+  assert.ok(edited.manualFields.includes('title'))
+  assert.ok(edited.manualFields.includes('purpose'))
+
+  // Re-import the same bookmark from another file: manual fields must remain intact
+  const reimported = normalizeRow(
+    {
+      url: 'https://x.com/alice/status/4001',
+      caption: 'Librería experimental para agentes con https://github.com/acme/agent-kit (texto actualizado)'
+    },
+    'second.json'
+  )
+  insertBookmarksBatch([reimported])
+
+  const afterReimport = getBookmarkById('x:4001')
+  assert.equal(afterReimport.title, 'Mi Título Curado Manualmente')
+  assert.equal(afterReimport.purpose, 'Mi explicación manual de para qué sirve este kit.')
+  assert.equal(afterReimport.notes, 'Revisar el fin de semana para integrarlo.')
+
+  // Reclassify all (force = false) preserves manual fields
+  reclassifyAllBookmarks(false)
+  const afterReclassify = getBookmarkById('x:4001')
+  assert.equal(afterReclassify.title, 'Mi Título Curado Manualmente')
+  assert.equal(afterReclassify.purpose, 'Mi explicación manual de para qué sirve este kit.')
+})
+
+test('WhatsApp chat parsing, phone number anonymization and import without fake HTTP URLs', () => {
+  const sampleChat = [
+    '[04/11/2026, 14:30:12] +54 9 11 4455-6677: Mirá este servidor MCP para automatizar el navegador https://github.com/microsoft/playwright-mcp',
+    '[04/11/2026, 14:31:00] Nico: Gracias! Lo guardo.',
+    '04/11/2026, 14:35 - +54 9 11 4455-6677: También te paso la doc oficial https://modelcontextprotocol.io/introduction'
+  ].join('\n')
+
+  const messages = parseWhatsAppChatText(sampleChat)
+  assert.equal(messages.length, 3)
+  // Phone number anonymized to last 4 digits
+  assert.equal(messages[0].sender, 'Contacto WA (•••6677)')
+  assert.equal(messages[0].hasLinks, true)
+  assert.equal(messages[1].hasLinks, false)
+
+  // Convert only messages with links into rows
+  const rows = whatsAppMessagesToRows(messages.filter(m => m.hasLinks), 'WhatsApp Chat.txt')
+  assert.equal(rows.length, 2)
+
+  const items = rows.map(r => normalizeRow(r, 'WhatsApp Chat.txt')).filter(Boolean)
+  assert.equal(items.length, 2)
+  assert.ok(items[0].sourceUrl.startsWith('whatsapp://message/'))
+  assert.equal(items[0].platform, 'whatsapp')
+  assert.match(items[0].title, /^microsoft\/playwright-mcp/)
+  assert.equal(items[0].resourceType, 'Servidor MCP o conector')
+
+  const dbRes = insertBookmarksBatch(items)
+  assert.equal(dbRes.added, 2)
 })
 
 test('Meta export preserves timestamp without inventing text or publication date', () => {
@@ -158,17 +474,13 @@ test('SQLite deduplication, enrichment, FTS5 search and batch transactional upda
   assert.equal(getBookmarkById(first.id).reviewed, true)
   assert.ok(getBookmarkById(first.id).topics.includes('Mi tema'))
 
-  // Reclassify preserves manual classification
-  const reclass = reclassifyAllBookmarks(false)
-  assert.equal(reclass.preservedManual, 1)
-
   // FTS5 search finds "Bauhaus"
   const foundExact = getAllBookmarks({ search: 'Bauhaus', searchMode: 'exact' })
   assert.equal(foundExact.length, 1)
   assert.equal(foundExact[0].id, first.id)
 })
 
-test('XLSX round trip preserves literal text, Confianza column, selected sheets and multiple topics', () => {
+test('Table, CSV, XLSX and JSON Backup v2 round trip preserve literal text and 8 default columns', () => {
   const item = normalizeRow(
     { url: 'https://x.com/a/status/888', caption: '=HYPERLINK("https://example.com")', topics: ['Uno', 'Dos'] },
     'test'
@@ -176,10 +488,21 @@ test('XLSX round trip preserves literal text, Confianza column, selected sheets 
   item.topics = ['Uno', 'Dos']
   item.confidence = 0.85
 
+  assert.equal(TABLE_DEFAULT_COLUMNS.length, 8)
   assert.ok(AVAILABLE_COLUMNS.includes('Confianza'))
   assert.ok(AVAILABLE_COLUMNS.includes('Handle / Usuario'))
 
-  const wb = buildWorkbook([item], { sheets: ALL_SHEETS, columns: AVAILABLE_COLUMNS })
+  // CSV matches TABLE_DEFAULT_COLUMNS and escapes formula injection
+  const csv = generateCsvString([item], { columns: TABLE_DEFAULT_COLUMNS })
+  assert.ok(csv.includes('Nombre / recurso,Para qué sirve,Tipo,Área / tema,Enlaces útiles,Evaluación breve,Estado del análisis,Origen'))
+
+  // JSON Backup v2 round trip re-import
+  const backupJson = JSON.stringify(buildJsonBackupV2([item]))
+  const restored = parseImportText(backupJson, 'atlas-backup-v2.json')
+  assert.equal(restored.items.length, 1)
+  assert.equal(restored.items[0].id, 'x:888')
+
+  const wb = buildWorkbook([item], { sheets: ALL_SHEETS, columns: ['ID', 'Texto completo', 'Confianza'] })
   const round = XLSX.read(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }), { type: 'buffer' })
   assert.deepEqual(round.SheetNames, ALL_SHEETS)
   assert.equal(round.Sheets.Todos.B2.t, 's')

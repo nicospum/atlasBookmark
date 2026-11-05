@@ -2,15 +2,44 @@
 
 import React, { useState, useMemo, useEffect } from 'react'
 import {
-  Search, LayoutGrid, Table as TableIcon, X as XIcon,
-  Camera, Check, Trash2, FileSpreadsheet, Image as ImageIcon, ChevronLeft, ChevronRight, X as XClose, Sparkles
+  Search,
+  LayoutGrid,
+  Table as TableIcon,
+  X as XIcon,
+  Camera,
+  Check,
+  Trash2,
+  FileSpreadsheet,
+  Image as ImageIcon,
+  ChevronLeft,
+  ChevronRight,
+  X as XClose,
+  Sparkles,
+  GitBranch as Github,
+  ExternalLink,
+  MessageCircle,
+  Columns,
+  FileText,
+  FileJson,
+  RefreshCw,
+  CheckCircle2,
+  Clock
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { BookmarkItem, SourcePlatform } from '@/lib/types'
-import { generateExcelFile, AVAILABLE_COLUMNS, ALL_SHEETS } from '@/lib/excel-export'
+import { AnalysisState, BookmarkItem, ResourceType, SourcePlatform } from '@/lib/types'
+import {
+  generateExcelFile,
+  downloadCsvFile,
+  downloadJsonBackupFile,
+  TABLE_DEFAULT_COLUMNS,
+  AVAILABLE_COLUMNS,
+  ALL_SHEETS,
+  formatAnalysisStateLabel
+} from '@/lib/excel-export'
 import { semanticSearchBookmarks } from '@/lib/ai-analyzer'
+import { CANONICAL_RESOURCE_TYPES } from '@/lib/resource-investigator'
 
 interface LibraryViewProps {
   items: BookmarkItem[]
@@ -19,6 +48,7 @@ interface LibraryViewProps {
   onDelete: (id: string) => void
   onBulkUpdateReviewed: (ids: string[], reviewed: boolean) => void
   onBulkDelete: (ids: string[]) => void
+  onRefresh?: () => Promise<void>
   externalTopicFilter?: string | null
   externalAuthorFilter?: string | null
   onClearExternalFilters?: () => void
@@ -33,6 +63,7 @@ export function LibraryView({
   onDelete,
   onBulkUpdateReviewed,
   onBulkDelete,
+  onRefresh,
   externalTopicFilter,
   externalAuthorFilter,
   onClearExternalFilters
@@ -41,14 +72,20 @@ export function LibraryView({
   const [searchMode, setSearchMode] = useState<'exact' | 'semantic'>('exact')
   const [platformFilter, setPlatformFilter] = useState<SourcePlatform | 'all'>('all')
   const [topicFilter, setTopicFilter] = useState<string>('all')
+  const [resourceTypeFilter, setResourceTypeFilter] = useState<ResourceType | 'all'>('all')
+  const [analysisStateFilter, setAnalysisStateFilter] = useState<AnalysisState | 'all'>('all')
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'reviewed'>('all')
   const [hasMediaOnly, setHasMediaOnly] = useState(false)
+  const [hasGitHubOnly, setHasGitHubOnly] = useState(false)
   const [sortBy, setSortBy] = useState<'savedDesc' | 'savedAsc' | 'pubDesc'>('savedDesc')
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [currentPage, setCurrentPage] = useState(1)
+  const [visibleColumns, setVisibleColumns] = useState<string[]>([...TABLE_DEFAULT_COLUMNS])
+  const [showColumnPicker, setShowColumnPicker] = useState(false)
+  const [isInvestigating, setIsInvestigating] = useState(false)
+  const [investigateMsg, setInvestigateMsg] = useState('')
 
-  // Sync external filters passed from Resumen / Temas / Fuentes
   useEffect(() => {
     if (externalTopicFilter) {
       setTopicFilter(externalTopicFilter)
@@ -63,23 +100,50 @@ export function LibraryView({
     }
   }, [externalAuthorFilter])
 
-  // Collect all unique topics
   const allTopics = useMemo(() => {
     const set = new Set<string>()
     items.forEach(i => i.topics.forEach(t => set.add(t)))
     return Array.from(set).sort()
   }, [items])
 
-  // Filtered & sorted items
+  const safeTimestamp = (item: BookmarkItem, field: 'savedAt' | 'publishedAt'): number => {
+    const raw =
+      field === 'savedAt'
+        ? item.savedAt || item.publishedAt || item.importedAt
+        : item.publishedAt || item.savedAt || item.importedAt
+    if (!raw) return 0
+    const t = new Date(raw).getTime()
+    return Number.isFinite(t) ? t : 0
+  }
+
+  const itemHasGitHub = (item: BookmarkItem): boolean => {
+    return (
+      (item.resources || []).some(r => r.kind === 'github_repo') ||
+      item.outgoingLinks.some(u => u.toLowerCase().includes('github.com/'))
+    )
+  }
+
   const filteredItems = useMemo(() => {
     const baseFiltered = items.filter(item => {
       if (platformFilter !== 'all' && item.platform !== platformFilter) return false
       if (topicFilter !== 'all' && !item.topics.includes(topicFilter)) return false
+      if (resourceTypeFilter !== 'all' && item.resourceType !== resourceTypeFilter) return false
+      if (analysisStateFilter !== 'all' && (item.analysisState || 'completed') !== analysisStateFilter) return false
       if (statusFilter === 'pending' && item.reviewed) return false
       if (statusFilter === 'reviewed' && !item.reviewed) return false
       if (hasMediaOnly && (item.mediaType === 'none' || item.mediaUrls.length === 0)) return false
+      if (hasGitHubOnly && !itemHasGitHub(item)) return false
       return true
     })
+
+    const sortList = <T extends BookmarkItem>(list: T[]): T[] => {
+      return [...list].sort((a, b) => {
+        if (sortBy === 'savedDesc') return safeTimestamp(b, 'savedAt') - safeTimestamp(a, 'savedAt')
+        if (sortBy === 'savedAsc') return safeTimestamp(a, 'savedAt') - safeTimestamp(b, 'savedAt')
+        if (sortBy === 'pubDesc') return safeTimestamp(b, 'publishedAt') - safeTimestamp(a, 'publishedAt')
+        return 0
+      })
+    }
 
     if (search.trim()) {
       if (searchMode === 'semantic') {
@@ -88,6 +152,11 @@ export function LibraryView({
 
       const q = search.toLowerCase()
       const exactFiltered = baseFiltered.filter(item => {
+        const inTitle = (item.title || '').toLowerCase().includes(q)
+        const inPurpose = (item.purpose || '').toLowerCase().includes(q)
+        const inType = (item.resourceType || '').toLowerCase().includes(q)
+        const inEval = (item.evaluation || '').toLowerCase().includes(q)
+        const inNotes = (item.notes || '').toLowerCase().includes(q)
         const inCaption = item.caption.toLowerCase().includes(q)
         const inAuthor =
           item.authorName.toLowerCase().includes(q) || item.authorHandle.toLowerCase().includes(q)
@@ -95,30 +164,45 @@ export function LibraryView({
         const inEntity = item.entities.some(e => e.toLowerCase().includes(q))
         const inSummary = item.aiSummary.toLowerCase().includes(q)
         const inCollection = (item.collections || []).some(c => c.toLowerCase().includes(q))
-        return inCaption || inAuthor || inTopic || inEntity || inSummary || inCollection
+        const inResources = (item.resources || []).some(
+          r =>
+            r.name.toLowerCase().includes(q) ||
+            (r.fullName || '').toLowerCase().includes(q) ||
+            r.resolvedUrl.toLowerCase().includes(q)
+        )
+        return (
+          inTitle ||
+          inPurpose ||
+          inType ||
+          inEval ||
+          inNotes ||
+          inCaption ||
+          inAuthor ||
+          inTopic ||
+          inEntity ||
+          inSummary ||
+          inCollection ||
+          inResources
+        )
       })
 
-      return exactFiltered.sort((a, b) => {
-        if (sortBy === 'savedDesc') return new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime()
-        if (sortBy === 'savedAsc') return new Date(a.savedAt).getTime() - new Date(b.savedAt).getTime()
-        if (sortBy === 'pubDesc') return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
-        return 0
-      })
+      return sortList(exactFiltered)
     }
 
-    return [...baseFiltered].sort((a, b) => {
-      if (sortBy === 'savedDesc') {
-        return new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime()
-      }
-      if (sortBy === 'savedAsc') {
-        return new Date(a.savedAt).getTime() - new Date(b.savedAt).getTime()
-      }
-      if (sortBy === 'pubDesc') {
-        return new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime()
-      }
-      return 0
-    })
-  }, [items, platformFilter, topicFilter, statusFilter, hasMediaOnly, search, searchMode, sortBy])
+    return sortList(baseFiltered)
+  }, [
+    items,
+    platformFilter,
+    topicFilter,
+    resourceTypeFilter,
+    analysisStateFilter,
+    statusFilter,
+    hasMediaOnly,
+    hasGitHubOnly,
+    search,
+    searchMode,
+    sortBy
+  ])
 
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE))
   const paginatedItems = useMemo(() => {
@@ -126,7 +210,6 @@ export function LibraryView({
     return filteredItems.slice(start, start + PAGE_SIZE)
   }, [filteredItems, currentPage])
 
-  // Selection handlers
   const handleSelectAll = () => {
     if (selectedIds.size === filteredItems.length) {
       setSelectedIds(new Set())
@@ -146,29 +229,94 @@ export function LibraryView({
     setSelectedIds(next)
   }
 
-  const handleExportSelected = () => {
-    const selectedItems = items.filter(i => selectedIds.has(i.id))
-    if (selectedItems.length === 0) return
-    generateExcelFile(selectedItems, {
+  const getExportTargetItems = (): { list: BookmarkItem[]; suffix: string } => {
+    if (selectedIds.size > 0) {
+      const sel = filteredItems.filter(i => selectedIds.has(i.id))
+      return { list: sel, suffix: `seleccionados-${sel.length}` }
+    }
+    return { list: filteredItems, suffix: `filtrados-${filteredItems.length}` }
+  }
+
+  const handleExportExcel = () => {
+    const { list, suffix } = getExportTargetItems()
+    if (list.length === 0) return
+    generateExcelFile(list, {
       sheets: [...ALL_SHEETS],
-      columns: AVAILABLE_COLUMNS,
-      filename: `atlas-seleccionados-${selectedItems.length}.xlsx`
+      columns: visibleColumns,
+      filename: `atlas-${suffix}.xlsx`
     })
+  }
+
+  const handleExportCsv = () => {
+    const { list, suffix } = getExportTargetItems()
+    if (list.length === 0) return
+    downloadCsvFile(list, visibleColumns, `atlas-${suffix}.csv`)
+  }
+
+  const handleExportJson = () => {
+    const { list, suffix } = getExportTargetItems()
+    if (list.length === 0) return
+    downloadJsonBackupFile(list, `atlas-backup-v2-${suffix}.json`)
+  }
+
+  const handleInvestigateBatch = async () => {
+    setIsInvestigating(true)
+    setInvestigateMsg('')
+    try {
+      const targetIds =
+        selectedIds.size > 0
+          ? Array.from(selectedIds).slice(0, 20)
+          : paginatedItems
+              .filter(i => i.outgoingLinks.length > 0 || (i.resources && i.resources.length > 0))
+              .slice(0, 12)
+              .map(i => i.id)
+
+      const res = await fetch('/api/ai/enrich', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'investigate-batch', ids: targetIds })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        setInvestigateMsg(data.message || 'Investigación de enlaces y GitHub completada.')
+        await onRefresh?.()
+      }
+    } catch {
+      setInvestigateMsg('No se pudo completar la investigación en red.')
+    } finally {
+      setIsInvestigating(false)
+    }
+  }
+
+  const toggleVisibleColumn = (col: string) => {
+    if (visibleColumns.includes(col)) {
+      if (visibleColumns.length > 2) {
+        setVisibleColumns(visibleColumns.filter(c => c !== col))
+      }
+    } else {
+      setVisibleColumns([...visibleColumns, col])
+    }
   }
 
   const handleResetFilters = () => {
     setSearch('')
     setPlatformFilter('all')
     setTopicFilter('all')
+    setResourceTypeFilter('all')
+    setAnalysisStateFilter('all')
     setStatusFilter('all')
     setHasMediaOnly(false)
+    setHasGitHubOnly(false)
     setCurrentPage(1)
     onClearExternalFilters?.()
   }
 
   const formatDate = (iso: string) => {
+    if (!iso) return '—'
     try {
-      return new Date(iso).toLocaleDateString('es-ES', {
+      const d = new Date(iso)
+      if (!Number.isFinite(d.getTime())) return '—'
+      return d.toLocaleDateString('es-ES', {
         day: 'numeric',
         month: 'short',
         year: 'numeric'
@@ -182,25 +330,153 @@ export function LibraryView({
     search.trim() !== '' ||
     platformFilter !== 'all' ||
     topicFilter !== 'all' ||
+    resourceTypeFilter !== 'all' ||
+    analysisStateFilter !== 'all' ||
     statusFilter !== 'all' ||
-    hasMediaOnly
+    hasMediaOnly ||
+    hasGitHubOnly
+
+  const renderPlatformBadge = (item: BookmarkItem) => {
+    if (item.platform === 'whatsapp') {
+      return (
+        <Badge
+          variant="outline"
+          className="gap-1 font-normal text-[11px] border-[#2d5a43] bg-[#162b21] text-[#91d0b4]"
+        >
+          <MessageCircle className="size-2.5" /> WhatsApp
+        </Badge>
+      )
+    }
+    if (item.platform === 'instagram') {
+      return (
+        <Badge
+          variant="outline"
+          className="gap-1 font-normal text-[11px] border-[#6f435f] bg-[#38212e] text-[#f2a8d6]"
+        >
+          <Camera className="size-2.5" /> Instagram
+        </Badge>
+      )
+    }
+    return (
+      <Badge
+        variant="outline"
+        className="gap-1 font-normal text-[11px] border-[#49436f] bg-[#222138] text-[#bfb8ff]"
+      >
+        <XIcon className="size-2.5" /> X
+      </Badge>
+    )
+  }
+
+  const renderAnalysisBadge = (item: BookmarkItem) => {
+    const st = item.analysisState || 'completed'
+    const label = formatAnalysisStateLabel(st)
+    const confirmedGh = (item.resources || []).some(
+      r => r.kind === 'github_repo' && r.verificationStatus === 'confirmed'
+    )
+    if (st === 'completed') {
+      return (
+        <div className="flex flex-col gap-0.5">
+          <Badge className="w-fit border-0 bg-[#1e3329] px-2 py-0.5 text-[10px] font-normal text-[#91d0b4]">
+            <CheckCircle2 className="mr-1 size-2.5" />
+            {label}
+          </Badge>
+          {confirmedGh && (
+            <span className="text-[10px] text-[#91d0b4]/80">GitHub verificado</span>
+          )}
+        </div>
+      )
+    }
+    if (st === 'partial') {
+      return (
+        <div className="flex flex-col gap-0.5">
+          <Badge className="w-fit border-0 bg-[#332b1c] px-2 py-0.5 text-[10px] font-normal text-[#f0c982]">
+            <Clock className="mr-1 size-2.5" />
+            {label}
+          </Badge>
+          <span className="text-[10px] text-muted-foreground">Texto + candidato</span>
+        </div>
+      )
+    }
+    return (
+      <Badge variant="outline" className="w-fit text-[10px] font-normal text-muted-foreground">
+        {label}
+      </Badge>
+    )
+  }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-5">
       {/* Encabezado */}
-      <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
+      <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
         <div>
-          <p className="mb-2 text-xs uppercase tracking-[0.16em] text-[#8e83f2]">Base de Datos Unificada · SQLite FTS5</p>
+          <p className="mb-1.5 text-xs uppercase tracking-[0.16em] text-[#8e83f2]">
+            Tabla Analítica Unificada · Guardado Persistente + Recursos Vinculados
+          </p>
           <h1 className="font-serif text-3xl sm:text-4xl tracking-[-0.04em] text-foreground">
-            Biblioteca de Guardados
+            Biblioteca de Guardados y Recursos
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Explora, busca por texto exacto o por concepto semántico y gestiona tus guardados de X e Instagram.
+            Visualizá qué es cada guardado, para qué sirve, su tipo, repositorios de GitHub y evaluación breve. La tabla exportada (CSV / Excel) conserva exactamente las columnas visibles aquí.
           </p>
         </div>
 
-        {/* Toggle table/cards */}
-        <div className="flex items-center gap-2">
+        {/* Controles superiores: Investigar, Columnas, Exportación rápida, Vista */}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={isInvestigating}
+            onClick={handleInvestigateBatch}
+            className="border-[#49436f] bg-[#1e1c30] text-xs text-[#bfb8ff] hover:bg-[#2a2742]"
+            title="Corroborar enlaces salientes y repositorios de GitHub en red"
+          >
+            <RefreshCw className={`mr-1.5 size-3.5 ${isInvestigating ? 'animate-spin' : ''}`} />
+            {isInvestigating ? 'Investigando enlaces...' : 'Investigar recursos / GitHub'}
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowColumnPicker(!showColumnPicker)}
+            className="border-border bg-[#16181f] text-xs"
+          >
+            <Columns className="mr-1.5 size-3.5 text-[#8e83f2]" />
+            Columnas ({visibleColumns.length})
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportCsv}
+            className="border-border bg-[#16181f] text-xs"
+            title="Exportar esta misma tabla a CSV (compatible con Excel y Google Sheets)"
+          >
+            <FileText className="mr-1.5 size-3.5 text-[#91d0b4]" />
+            CSV ({selectedIds.size > 0 ? selectedIds.size : filteredItems.length})
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportExcel}
+            className="border-border bg-[#16181f] text-xs"
+            title="Exportar esta misma tabla a libro Excel (.xlsx)"
+          >
+            <FileSpreadsheet className="mr-1.5 size-3.5 text-[#8e83f2]" />
+            Excel ({selectedIds.size > 0 ? selectedIds.size : filteredItems.length})
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportJson}
+            className="border-border bg-[#16181f] text-xs"
+            title="Descargar respaldo JSON versionado (re-importable)"
+          >
+            <FileJson className="mr-1.5 size-3.5 text-[#f0c982]" />
+            JSON v2
+          </Button>
+
           <div className="flex items-center rounded-lg border border-border bg-[#16181f] p-1">
             <button
               onClick={() => setViewMode('table')}
@@ -224,9 +500,63 @@ export function LibraryView({
         </div>
       </div>
 
+      {investigateMsg && (
+        <div className="flex items-center justify-between rounded-lg border border-[#2d4a3e] bg-[#162621] px-4 py-2.5 text-xs text-[#91d0b4]">
+          <span>{investigateMsg}</span>
+          <button onClick={() => setInvestigateMsg('')} className="text-muted-foreground hover:text-white">
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Selector de columnas visibles (sincronizado con exportación CSV/XLSX) */}
+      {showColumnPicker && (
+        <div className="rounded-lg border border-[#35314f] bg-[#161822] p-4 text-xs">
+          <div className="mb-2.5 flex items-center justify-between">
+            <span className="font-medium text-foreground">
+              Columnas visibles en la tabla y al exportar (CSV / XLSX):
+            </span>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setVisibleColumns([...TABLE_DEFAULT_COLUMNS])}
+                className="text-[#a59cf5] hover:underline"
+              >
+                Restaurar 8 recomendadas
+              </button>
+              <button
+                onClick={() => setVisibleColumns([...AVAILABLE_COLUMNS])}
+                className="text-[#a59cf5] hover:underline"
+              >
+                Mostrar todas
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {AVAILABLE_COLUMNS.map(col => {
+              const active = visibleColumns.includes(col)
+              return (
+                <Badge
+                  key={col}
+                  variant={active ? 'secondary' : 'outline'}
+                  onClick={() => toggleVisibleColumn(col)}
+                  className={`cursor-pointer gap-1 py-1 text-[11px] ${
+                    active
+                      ? 'bg-[#29273f] text-[#bfb8ff] hover:bg-[#343252]'
+                      : 'border-border text-muted-foreground hover:border-[#7c6cf0]'
+                  }`}
+                >
+                  {active && <Check className="size-3 text-[#91d0b4]" />}
+                  <span>{col}</span>
+                </Badge>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Barra de Filtros y Búsqueda */}
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-[#16181f] p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
           {/* Input de búsqueda + Selector Exacta / Semántica */}
           <div className="flex flex-1 items-center gap-2">
             <div className="relative flex-1">
@@ -240,8 +570,8 @@ export function LibraryView({
                 }}
                 placeholder={
                   searchMode === 'semantic'
-                    ? 'Búsqueda conceptual (ej: "arquitectura de agentes", "interfaces bauhaus")...'
-                    : 'Buscar en texto, autor, temas, colecciones, entidades o resumen IA...'
+                    ? 'Búsqueda conceptual (ej: "agentes de programación", "repositorios de voz")...'
+                    : 'Buscar por nombre, para qué sirve, repositorio GitHub, autor, tema o texto...'
                 }
                 className="h-9 w-full rounded-md border border-border bg-[#101217] pl-9 pr-16 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
               />
@@ -270,7 +600,7 @@ export function LibraryView({
                   ? 'border-[#7c6cf0] bg-[#28263b] text-[#bfb8ff]'
                   : 'border-border bg-[#101217] text-muted-foreground hover:text-foreground'
               }`}
-              title="Alternar entre búsqueda exacta FTS5 y búsqueda conceptual por similitud semántica"
+              title="Alternar entre búsqueda exacta FTS5 y búsqueda conceptual"
             >
               <Sparkles className="size-3.5" />
               <span>{searchMode === 'semantic' ? 'Semántica' : 'Exacta'}</span>
@@ -279,30 +609,48 @@ export function LibraryView({
 
           {/* Filtros selectores */}
           <div className="flex flex-wrap items-center gap-2">
-            {/* Fuente */}
+            {/* Origen */}
             <select
               value={platformFilter}
               onChange={e => {
                 setPlatformFilter(e.target.value as any)
                 setCurrentPage(1)
               }}
-              className="h-9 rounded-md border border-border bg-[#101217] px-3 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+              className="h-9 rounded-md border border-border bg-[#101217] px-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
             >
-              <option value="all">Todas las fuentes</option>
-              <option value="x">Solo X / Twitter</option>
-              <option value="instagram">Solo Instagram</option>
+              <option value="all">Todos los orígenes</option>
+              <option value="x">X / Twitter</option>
+              <option value="instagram">Instagram</option>
+              <option value="whatsapp">WhatsApp</option>
             </select>
 
-            {/* Tema */}
+            {/* Tipo de Recurso */}
+            <select
+              value={resourceTypeFilter}
+              onChange={e => {
+                setResourceTypeFilter(e.target.value as any)
+                setCurrentPage(1)
+              }}
+              className="h-9 max-w-[180px] rounded-md border border-border bg-[#101217] px-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+            >
+              <option value="all">Todos los tipos</option>
+              {CANONICAL_RESOURCE_TYPES.map(rt => (
+                <option key={rt} value={rt}>
+                  {rt}
+                </option>
+              ))}
+            </select>
+
+            {/* Área / Tema */}
             <select
               value={topicFilter}
               onChange={e => {
                 setTopicFilter(e.target.value)
                 setCurrentPage(1)
               }}
-              className="h-9 rounded-md border border-border bg-[#101217] px-3 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+              className="h-9 rounded-md border border-border bg-[#101217] px-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
             >
-              <option value="all">Todos los temas ({allTopics.length})</option>
+              <option value="all">Todas las áreas ({allTopics.length})</option>
               {allTopics.map(t => (
                 <option key={t} value={t}>
                   {t}
@@ -310,45 +658,63 @@ export function LibraryView({
               ))}
             </select>
 
-            {/* Estado */}
+            {/* Estado del análisis */}
             <select
-              value={statusFilter}
+              value={analysisStateFilter}
               onChange={e => {
-                setStatusFilter(e.target.value as any)
+                setAnalysisStateFilter(e.target.value as any)
                 setCurrentPage(1)
               }}
-              className="h-9 rounded-md border border-border bg-[#101217] px-3 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+              className="h-9 rounded-md border border-border bg-[#101217] px-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
             >
-              <option value="all">Cualquier estado</option>
-              <option value="pending">Solo pendientes</option>
-              <option value="reviewed">Solo revisados</option>
+              <option value="all">Cualquier análisis</option>
+              <option value="completed">Completado</option>
+              <option value="partial">Parcial</option>
+              <option value="pending">Pendiente</option>
+              <option value="error">Con error</option>
             </select>
 
             {/* Orden */}
             <select
               value={sortBy}
               onChange={e => setSortBy(e.target.value as any)}
-              className="h-9 rounded-md border border-border bg-[#101217] px-3 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+              className="h-9 rounded-md border border-border bg-[#101217] px-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
             >
-              <option value="savedDesc">Guardados más recientes</option>
-              <option value="savedAsc">Guardados más antiguos</option>
-              <option value="pubDesc">Publicación original</option>
+              <option value="savedDesc">Más recientes</option>
+              <option value="savedAsc">Más antiguos</option>
+              <option value="pubDesc">Fecha publicación</option>
             </select>
 
-            {/* Switch con media */}
+            {/* Switch Con GitHub */}
+            <button
+              onClick={() => {
+                setHasGitHubOnly(!hasGitHubOnly)
+                setCurrentPage(1)
+              }}
+              className={`flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors ${
+                hasGitHubOnly
+                  ? 'border-[#7c6cf0] bg-[#28263b] text-[#bfb8ff]'
+                  : 'border-border bg-[#101217] text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              <Github className="size-3.5" />
+              <span>Con GitHub</span>
+            </button>
+
+            {/* Switch Con media */}
             <button
               onClick={() => {
                 setHasMediaOnly(!hasMediaOnly)
                 setCurrentPage(1)
               }}
-              className={`flex h-9 items-center gap-1.5 rounded-md border px-3 text-xs transition-colors ${
+              className={`flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors ${
                 hasMediaOnly
                   ? 'border-[#7c6cf0] bg-[#28263b] text-[#bfb8ff]'
                   : 'border-border bg-[#101217] text-muted-foreground hover:text-foreground'
               }`}
             >
               <ImageIcon className="size-3.5" />
-              <span>Con media</span>
+              <span>Media</span>
             </button>
 
             {hasActiveFilters && (
@@ -370,22 +736,30 @@ export function LibraryView({
             <span className="font-medium text-[#bfb8ff]">
               {selectedIds.size} elemento{selectedIds.size > 1 ? 's' : ''} seleccionado{selectedIds.size > 1 ? 's' : ''}
             </span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => onBulkUpdateReviewed(Array.from(selectedIds), true)}
                 className="border-border text-xs"
               >
-                <Check className="size-3 mr-1 text-[#91d0b4]" /> Marcar como revisados
+                <Check className="size-3 mr-1 text-[#91d0b4]" /> Marcar revisados
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleExportSelected}
+                onClick={handleExportCsv}
                 className="border-border text-xs"
               >
-                <FileSpreadsheet className="size-3 mr-1 text-[#8e83f2]" /> Exportar selección a Excel
+                <FileText className="size-3 mr-1 text-[#91d0b4]" /> Exportar selección (CSV)
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExportExcel}
+                className="border-border text-xs"
+              >
+                <FileSpreadsheet className="size-3 mr-1 text-[#8e83f2]" /> Exportar selección (Excel)
               </Button>
               <Button
                 variant="destructive"
@@ -409,7 +783,7 @@ export function LibraryView({
       <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
         <p>
           Mostrando <strong className="text-foreground">{paginatedItems.length}</strong> de{' '}
-          <strong className="text-foreground">{filteredItems.length}</strong> filtrados ({items.length} totales)
+          <strong className="text-foreground">{filteredItems.length}</strong> filtrados ({items.length} totales en base)
           {search.trim() && searchMode === 'semantic' && (
             <span className="ml-2 text-[#bfb8ff]">· Ordenados por afinidad conceptual</span>
           )}
@@ -419,18 +793,20 @@ export function LibraryView({
             onClick={handleSelectAll}
             className="text-xs text-[#a59cf5] hover:underline"
           >
-            {selectedIds.size === filteredItems.length ? 'Deseleccionar todos' : 'Seleccionar todos en vista'}
+            {selectedIds.size === filteredItems.length
+              ? 'Deseleccionar todos'
+              : `Seleccionar los ${filteredItems.length} filtrados`}
           </button>
         )}
       </div>
 
-      {/* Contenido: Modo Tabla */}
+      {/* Contenido: Modo Tabla Comprensible */}
       {viewMode === 'table' ? (
-        <div className="overflow-hidden rounded-lg border border-border bg-[#16181f]">
+        <div className="overflow-x-auto rounded-lg border border-border bg-[#16181f]">
           <Table>
             <TableHeader className="bg-[#121318]">
               <TableRow className="border-border hover:bg-transparent">
-                <TableHead className="w-10 text-center">
+                <TableHead className="w-9 text-center">
                   <input
                     type="checkbox"
                     checked={filteredItems.length > 0 && selectedIds.size === filteredItems.length}
@@ -438,34 +814,64 @@ export function LibraryView({
                     className="accent-[#7c6cf0]"
                   />
                 </TableHead>
-                <TableHead className="w-[110px]">Fuente</TableHead>
-                <TableHead className="w-[180px]">Autor</TableHead>
-                <TableHead>Contenido / Texto</TableHead>
-                <TableHead className="w-[190px]">Temas</TableHead>
-                <TableHead className="w-[110px]">Guardado</TableHead>
-                <TableHead className="w-[80px] text-right">Estado</TableHead>
+                {visibleColumns.includes('Nombre / recurso') && (
+                  <TableHead className="min-w-[220px]">Nombre / recurso</TableHead>
+                )}
+                {visibleColumns.includes('Para qué sirve') && (
+                  <TableHead className="min-w-[260px]">Para qué sirve</TableHead>
+                )}
+                {visibleColumns.includes('Tipo') && (
+                  <TableHead className="w-[155px]">Tipo</TableHead>
+                )}
+                {visibleColumns.includes('Área / tema') && (
+                  <TableHead className="w-[160px]">Área / tema</TableHead>
+                )}
+                {visibleColumns.includes('Enlaces útiles') && (
+                  <TableHead className="min-w-[185px]">Enlaces útiles</TableHead>
+                )}
+                {visibleColumns.includes('Evaluación breve') && (
+                  <TableHead className="min-w-[230px]">Evaluación breve</TableHead>
+                )}
+                {visibleColumns.includes('Estado del análisis') && (
+                  <TableHead className="w-[130px]">Estado del análisis</TableHead>
+                )}
+                {visibleColumns.includes('Origen') && (
+                  <TableHead className="w-[130px]">Origen</TableHead>
+                )}
+                {visibleColumns.includes('Autor') && (
+                  <TableHead className="w-[150px]">Autor</TableHead>
+                )}
+                {visibleColumns.includes('Notas') && (
+                  <TableHead className="min-w-[160px]">Notas</TableHead>
+                )}
+                {visibleColumns.includes('Texto completo') && (
+                  <TableHead className="min-w-[240px]">Texto original</TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginatedItems.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-40 text-center text-muted-foreground">
+                  <TableCell colSpan={visibleColumns.length + 1} className="h-40 text-center text-muted-foreground">
                     No se encontraron guardados con los filtros aplicados.
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedItems.map((item: any) => {
+                paginatedItems.map((item: BookmarkItem & { semanticScore?: number }) => {
                   const isSelected = selectedIds.has(item.id)
+                  const ghRepos = (item.resources || []).filter(r => r.kind === 'github_repo')
+                  const otherLinks = (item.resources || []).filter(r => r.kind !== 'github_repo')
+
                   return (
                     <TableRow
                       key={item.id}
                       onClick={() => onOpenDetail(item)}
-                      className={`cursor-pointer border-border transition-colors hover:bg-[#1f212a] ${
+                      className={`cursor-pointer border-border align-top transition-colors hover:bg-[#1f212a] ${
                         isSelected ? 'bg-[#212030]' : ''
                       }`}
                     >
                       <TableCell
-                        className="text-center"
+                        className="pt-3.5 text-center"
                         onClick={e => handleToggleSelect(item.id, e)}
                       >
                         <input
@@ -476,101 +882,184 @@ export function LibraryView({
                         />
                       </TableCell>
 
-                      {/* Fuente */}
-                      <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={`gap-1 font-normal text-[11px] ${
-                            item.platform === 'x'
-                              ? 'border-[#49436f] bg-[#222138] text-[#bfb8ff]'
-                              : 'border-[#6f435f] bg-[#38212e] text-[#f2a8d6]'
-                          }`}
-                        >
-                          {item.platform === 'x' ? (
-                            <>
-                              <XIcon className="size-2.5" /> X
-                            </>
-                          ) : (
-                            <>
-                              <Camera className="size-2.5" /> IG
-                            </>
-                          )}
-                        </Badge>
-                      </TableCell>
-
-                      {/* Autor */}
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {item.authorAvatar ? (
-                            <img
-                              src={item.authorAvatar}
-                              alt={item.authorName}
-                              className="size-6 rounded-full object-cover"
-                            />
-                          ) : (
-                            <div className="grid size-6 place-items-center rounded-full bg-[#353743] text-[10px]">
-                              {item.authorName.slice(0, 1)}
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <p className="truncate text-xs font-medium text-foreground">{item.authorName}</p>
-                            <p className="truncate text-[10px] text-muted-foreground">{item.authorHandle}</p>
-                          </div>
-                        </div>
-                      </TableCell>
-
-                      {/* Texto */}
-                      <TableCell className="max-w-[380px]">
-                        <p className="truncate font-serif text-xs text-[#dcd9e8]">
-                          {item.caption}
-                        </p>
-                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                          {item.aiSummary}
-                        </p>
-                      </TableCell>
-
-                      {/* Temas */}
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {typeof item.semanticScore === 'number' && search.trim() && searchMode === 'semantic' && (
-                            <Badge
-                              variant="outline"
-                              className="border-[#35314f] bg-[#1b1a29] px-1.5 py-0 text-[10px] text-[#91d0b4]"
-                            >
-                              {Math.round(item.semanticScore * 100)}%
-                            </Badge>
-                          )}
-                          {item.topics.slice(0, 2).map((t: string) => (
-                            <Badge
-                              key={t}
-                              variant="secondary"
-                              className="bg-[#242632] px-1.5 py-0 text-[10px] font-normal text-[#cfcbef]"
-                            >
-                              {t}
-                            </Badge>
-                          ))}
-                          {item.topics.length > 2 && (
-                            <span className="text-[10px] text-muted-foreground">
-                              +{item.topics.length - 2}
+                      {/* 1. Nombre / recurso */}
+                      {visibleColumns.includes('Nombre / recurso') && (
+                        <TableCell className="max-w-[260px] py-3">
+                          <p className="font-medium text-xs leading-snug text-[#f0eef8] line-clamp-2">
+                            {item.title || item.caption.slice(0, 75) || item.authorName}
+                          </p>
+                          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                            <span className="truncate font-mono text-[10px] text-[#a59cf5]">
+                              {item.authorHandle || item.authorName}
                             </span>
-                          )}
-                        </div>
-                      </TableCell>
+                            {item.reviewed && (
+                              <span className="rounded bg-[#21352a] px-1 py-0 text-[9px] text-[#91d0b4]">
+                                Revisado
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                      )}
 
-                      {/* Fecha guardado */}
-                      <TableCell className="text-xs text-muted-foreground">
-                        {formatDate(item.savedAt)}
-                      </TableCell>
+                      {/* 2. Para qué sirve */}
+                      {visibleColumns.includes('Para qué sirve') && (
+                        <TableCell className="max-w-[310px] py-3">
+                          <p className="text-xs leading-relaxed text-[#d7d4e6] line-clamp-3">
+                            {item.purpose || item.aiSummary}
+                          </p>
+                        </TableCell>
+                      )}
 
-                      {/* Estado */}
-                      <TableCell className="text-right">
-                        <span
-                          className={`inline-block size-2 rounded-full ${
-                            item.reviewed ? 'bg-[#91d0b4]' : 'bg-[#e5a95f]'
-                          }`}
-                          title={item.reviewed ? 'Revisado' : 'Pendiente'}
-                        />
-                      </TableCell>
+                      {/* 3. Tipo */}
+                      {visibleColumns.includes('Tipo') && (
+                        <TableCell className="py-3">
+                          <Badge
+                            variant="outline"
+                            className="whitespace-normal border-[#3b3759] bg-[#1d1c2b] px-2 py-0.5 text-[10px] font-normal leading-tight text-[#d2ccff]"
+                          >
+                            {item.resourceType || 'Otro / pendiente de clasificar'}
+                          </Badge>
+                        </TableCell>
+                      )}
+
+                      {/* 4. Área / tema */}
+                      {visibleColumns.includes('Área / tema') && (
+                        <TableCell className="py-3">
+                          <div className="flex flex-wrap gap-1">
+                            {typeof item.semanticScore === 'number' && search.trim() && searchMode === 'semantic' && (
+                              <Badge
+                                variant="outline"
+                                className="border-[#35314f] bg-[#1b1a29] px-1.5 py-0 text-[10px] text-[#91d0b4]"
+                              >
+                                {Math.round(item.semanticScore * 100)}%
+                              </Badge>
+                            )}
+                            {item.topics.slice(0, 3).map((t: string) => (
+                              <Badge
+                                key={t}
+                                variant="secondary"
+                                className="bg-[#242632] px-1.5 py-0 text-[10px] font-normal text-[#cfcbef]"
+                              >
+                                {t}
+                              </Badge>
+                            ))}
+                            {item.topics.length > 3 && (
+                              <span className="text-[10px] text-muted-foreground">+{item.topics.length - 3}</span>
+                            )}
+                          </div>
+                        </TableCell>
+                      )}
+
+                      {/* 5. Enlaces útiles */}
+                      {visibleColumns.includes('Enlaces útiles') && (
+                        <TableCell className="max-w-[230px] py-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex flex-col gap-1">
+                            {ghRepos.slice(0, 2).map(repo => (
+                              <a
+                                key={repo.id + repo.resolvedUrl}
+                                href={repo.resolvedUrl || repo.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex w-fit max-w-full items-center gap-1 rounded border border-[#3a4252] bg-[#161b24] px-2 py-0.5 text-[11px] text-[#91d0b4] hover:border-[#91d0b4]"
+                                title={repo.description || repo.resolvedUrl}
+                              >
+                                <Github className="size-3 shrink-0" />
+                                <span className="truncate font-mono text-[10px]">
+                                  {repo.fullName || repo.name}
+                                </span>
+                                {repo.verificationStatus === 'confirmed' && (
+                                  <Check className="size-2.5 shrink-0 text-[#91d0b4]" />
+                                )}
+                              </a>
+                            ))}
+                            {ghRepos.length > 2 && (
+                              <span className="text-[10px] text-[#91d0b4]/80">
+                                +{ghRepos.length - 2} repositorios más en ficha
+                              </span>
+                            )}
+                            {otherLinks.slice(0, 2).map(link => (
+                              <a
+                                key={link.id + link.resolvedUrl}
+                                href={link.resolvedUrl || link.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex w-fit max-w-full items-center gap-1 text-[11px] text-[#a59cf5] hover:underline"
+                              >
+                                <ExternalLink className="size-2.5 shrink-0" />
+                                <span className="truncate">
+                                  {link.kind === 'article'
+                                    ? 'Artículo X'
+                                    : link.kind === 'docs'
+                                    ? `Docs (${link.domain})`
+                                    : link.domain || 'Enlace'}
+                                </span>
+                              </a>
+                            ))}
+                            {ghRepos.length === 0 && otherLinks.length === 0 && (
+                              <span className="text-[11px] text-muted-foreground">Sin enlaces externos</span>
+                            )}
+                          </div>
+                        </TableCell>
+                      )}
+
+                      {/* 6. Evaluación breve */}
+                      {visibleColumns.includes('Evaluación breve') && (
+                        <TableCell className="max-w-[260px] py-3">
+                          <p className="text-[11px] leading-relaxed text-muted-foreground line-clamp-3">
+                            {item.evaluation || 'Basado en el texto de la publicación.'}
+                          </p>
+                        </TableCell>
+                      )}
+
+                      {/* 7. Estado del análisis */}
+                      {visibleColumns.includes('Estado del análisis') && (
+                        <TableCell className="py-3">{renderAnalysisBadge(item)}</TableCell>
+                      )}
+
+                      {/* 8. Origen */}
+                      {visibleColumns.includes('Origen') && (
+                        <TableCell className="py-3" onClick={e => e.stopPropagation()}>
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-1.5">
+                              {renderPlatformBadge(item)}
+                              {item.sourceUrl && item.sourceUrl.startsWith('http') && (
+                                <a
+                                  href={item.sourceUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-muted-foreground hover:text-foreground"
+                                  title="Abrir publicación original"
+                                >
+                                  <ExternalLink className="size-3" />
+                                </a>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">
+                              {formatDate(item.savedAt || item.publishedAt)}
+                            </span>
+                          </div>
+                        </TableCell>
+                      )}
+
+                      {/* Columnas opcionales */}
+                      {visibleColumns.includes('Autor') && (
+                        <TableCell className="py-3 text-xs">
+                          <p className="font-medium text-foreground">{item.authorName}</p>
+                          <p className="text-[10px] text-muted-foreground">{item.authorHandle}</p>
+                        </TableCell>
+                      )}
+
+                      {visibleColumns.includes('Notas') && (
+                        <TableCell className="max-w-[200px] py-3 text-xs text-[#f0c982]">
+                          {item.notes || '—'}
+                        </TableCell>
+                      )}
+
+                      {visibleColumns.includes('Texto completo') && (
+                        <TableCell className="max-w-[280px] py-3 text-xs text-muted-foreground">
+                          <p className="line-clamp-3">{item.caption}</p>
+                        </TableCell>
+                      )}
                     </TableRow>
                   )
                 })
@@ -581,83 +1070,74 @@ export function LibraryView({
       ) : (
         /* Contenido: Modo Tarjetas */
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {paginatedItems.map((item: any) => (
-            <div
-              key={item.id}
-              onClick={() => onOpenDetail(item)}
-              className="flex cursor-pointer flex-col justify-between rounded-lg border border-border bg-[#16181f] p-4 transition-all hover:border-[#7c6cf0]/50 hover:bg-[#1a1c24]"
-            >
-              <div>
-                <div className="flex items-center justify-between">
-                  <Badge
-                    variant="outline"
-                    className={`gap-1 text-[11px] font-normal ${
-                      item.platform === 'x'
-                        ? 'border-[#49436f] text-[#bfb8ff]'
-                        : 'border-[#6f435f] text-[#f2a8d6]'
-                    }`}
-                  >
-                    {item.platform === 'x' ? <XIcon className="size-2.5" /> : <Camera className="size-2.5" />}
-                    {item.platform === 'x' ? 'X / Twitter' : 'Instagram'}
-                  </Badge>
+          {paginatedItems.map((item: BookmarkItem) => {
+            const ghRepos = (item.resources || []).filter(r => r.kind === 'github_repo')
+            return (
+              <div
+                key={item.id}
+                onClick={() => onOpenDetail(item)}
+                className="flex cursor-pointer flex-col justify-between rounded-lg border border-border bg-[#16181f] p-4 transition-all hover:border-[#7c6cf0]/50 hover:bg-[#1a1c24]"
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-2">
+                    {renderPlatformBadge(item)}
+                    <Badge
+                      variant="outline"
+                      className="border-[#3b3759] bg-[#1d1c2b] text-[10px] font-normal text-[#d2ccff]"
+                    >
+                      {item.resourceType || 'Recurso'}
+                    </Badge>
+                  </div>
 
-                  <span
-                    className={`size-2 rounded-full ${item.reviewed ? 'bg-[#91d0b4]' : 'bg-[#e5a95f]'}`}
-                    title={item.reviewed ? 'Revisado' : 'Pendiente'}
-                  />
-                </div>
+                  <h3 className="mt-3 font-medium text-sm leading-snug text-[#f3f1f8]">
+                    {item.title || item.caption.slice(0, 80)}
+                  </h3>
 
-                <div className="mt-3 flex items-center gap-2">
-                  {item.authorAvatar ? (
-                    <img
-                      src={item.authorAvatar}
-                      alt={item.authorName}
-                      className="size-7 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className="grid size-7 place-items-center rounded-full bg-[#353743] text-xs">
-                      {item.authorName.slice(0, 1)}
+                  <p className="mt-2 text-xs leading-relaxed text-[#cfcde0] line-clamp-3">
+                    {item.purpose || item.aiSummary}
+                  </p>
+
+                  {ghRepos.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-1.5" onClick={e => e.stopPropagation()}>
+                      {ghRepos.slice(0, 3).map(repo => (
+                        <a
+                          key={repo.id + repo.resolvedUrl}
+                          href={repo.resolvedUrl || repo.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded border border-[#3a4252] bg-[#161b24] px-2 py-0.5 text-[11px] text-[#91d0b4] hover:border-[#91d0b4]"
+                        >
+                          <Github className="size-3" />
+                          <span className="font-mono text-[10px]">{repo.fullName || repo.name}</span>
+                        </a>
+                      ))}
                     </div>
                   )}
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-medium text-foreground">{item.authorName}</p>
-                    <p className="truncate text-[10px] text-muted-foreground">{item.authorHandle}</p>
-                  </div>
+
+                  <p className="mt-2.5 text-[11px] text-muted-foreground line-clamp-2">
+                    {item.evaluation}
+                  </p>
                 </div>
 
-                <p className="mt-3 font-serif text-sm leading-relaxed line-clamp-3 text-[#eae7f5]">
-                  {item.caption}
-                </p>
-
-                {item.mediaUrls && item.mediaUrls.length > 0 && (
-                  <div className="mt-3 overflow-hidden rounded-md border border-border">
-                    <img
-                      src={item.mediaUrls[0]}
-                      alt="Media"
-                      className="h-32 w-full object-cover"
-                    />
+                <div className="mt-4 border-t border-border/60 pt-3">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {item.topics.slice(0, 3).map((t: string) => (
+                      <Badge
+                        key={t}
+                        variant="secondary"
+                        className="bg-[#242632] px-2 py-0 text-[10px] text-[#cfcbef]"
+                      >
+                        {t}
+                      </Badge>
+                    ))}
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      {item.authorHandle} · {formatDate(item.savedAt || item.publishedAt)}
+                    </span>
                   </div>
-                )}
-              </div>
-
-              <div className="mt-4 border-t border-border/60 pt-3">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {item.topics.map((t: string) => (
-                    <Badge
-                      key={t}
-                      variant="secondary"
-                      className="bg-[#242632] px-2 py-0 text-[10px] text-[#cfcbef]"
-                    >
-                      {t}
-                    </Badge>
-                  ))}
-                  <span className="ml-auto text-[10px] text-muted-foreground">
-                    {formatDate(item.savedAt)}
-                  </span>
                 </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -666,7 +1146,7 @@ export function LibraryView({
         <div className="flex items-center justify-between rounded-lg border border-border bg-[#16181f] px-4 py-3 text-xs">
           <span className="text-muted-foreground">
             Página <strong className="text-foreground">{currentPage}</strong> de{' '}
-            <strong className="text-foreground">{totalPages}</strong>
+            <strong className="text-foreground">{totalPages}</strong> ({filteredItems.length} resultados)
           </span>
           <div className="flex items-center gap-2">
             <Button
