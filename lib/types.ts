@@ -276,18 +276,43 @@ export interface GalleryRepository {
   customOrder?: number
 }
 
-export type ActivityFilterType = 'ALL' | 'recent' | 'month' | 'quarter' | 'inactive'
+export type ActivityFilterType =
+  | 'ALL'
+  | 'recent'
+  | 'month'
+  | 'quarter'
+  | 'inactive'
+  | 'active_week'
+  | 'active_month'
+  | 'active_quarter'
 export type CreatedAtFilterType = 'ALL' | 'week' | 'month' | 'three_months' | 'six_months' | 'year'
-export type RepoSortByType = 'custom' | 'stars' | 'bookmarks' | 'recent_added' | 'updated' | 'created' | 'name'
+export type RepoSortByType =
+  | 'custom'
+  | 'stars'
+  | 'bookmarks'
+  | 'recent_added'
+  | 'updated'
+  | 'created'
+  | 'name'
+  | 'bookmarks_desc'
+  | 'stars_desc'
+  | 'updated_desc'
+  | 'created_desc'
+  | 'added_desc'
+  | 'name_asc'
 export type DiscoverCategory =
   | 'all'
+  | 'featured'
   | 'recommended'
+  | 'for_you'
   | 'trending'
   | 'new'
+  | 'new_noteworthy'
   | 'ai'
   | 'mcp_agents'
   | 'devtools'
   | 'cli'
+  | 'ui'
   | 'design'
   | 'automation'
 
@@ -297,14 +322,37 @@ export interface RateLimitInfo {
   resetTime: string
 }
 
-export type AiProviderId = 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'local_rules'
+export type AiProviderId = 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'local_rules' | 'deterministic'
 
 export interface AiProviderInfo {
   id: AiProviderId
-  displayName: string
-  description: string
+  displayName?: string
+  name?: string
+  description?: string
   configured: boolean
-  defaultModel: string
+  defaultModel?: string
+  model?: string
   defaultBaseUrl?: string
-  requiresApiKey: boolean
+  requiresApiKey?: boolean
+}
+
+export interface InstallSnippetInfo {
+  primaryCommand: string
+  commands: string[]
+  allCommands?: string[]
+  mcpConfigJson?: string
+  category: 'mcp' | 'skill' | 'npm' | 'pip' | 'docker' | 'git'
+  installKind?: 'npx' | 'mcp' | 'skill' | 'pip' | 'uv' | 'npm' | 'docker' | 'cargo' | 'git'
+}
+
+export interface ProjectBlueprint {
+  id: string
+  name: string
+  description: string
+  goal: string
+  repoFullNames: string[]
+  bookmarkIds: string[]
+  notes: string
+  createdAt: string
+  updatedAt: string
 }

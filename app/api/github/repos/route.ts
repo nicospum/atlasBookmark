@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import {
+  getAllBookmarks,
   getAllGalleryRepositories,
   getGalleryRepositoryByFullName,
   saveGalleryRepoWithBookmark,
@@ -7,28 +8,53 @@ import {
   deleteGalleryRepository,
   saveGalleryCustomOrder,
   syncBookmarksToGitHubGallery,
-  updateBookmark
+  updateBookmark,
+  getAllProjectBlueprints,
+  upsertProjectBlueprint,
+  deleteProjectBlueprint,
+  expandShortenedUrlsBatch
 } from '@/lib/bookmarks-repository'
 import {
   parseGitHubUrl,
   fetchGitHubRepositoryData,
   explainRepoWithAiServer,
   parseGalleryImportJson,
-  buildDeterministicSpanishExplanations
+  buildDeterministicSpanishExplanations,
+  fetchUserStarredRepos,
+  generateProjectMasterPrompt
 } from '@/lib/github-gallery'
-import type { AiProviderId, GalleryRepository, ResourceType } from '@/lib/types'
+import type { AiProviderId, GalleryRepository, ProjectBlueprint, ResourceType } from '@/lib/types'
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, x-github-token'
+}
+
+function jsonWithCors(data: any, init?: { status?: number }) {
+  return NextResponse.json(data, {
+    status: init?.status || 200,
+    headers: CORS_HEADERS
+  })
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS })
+}
 
 export async function GET() {
   try {
     syncBookmarksToGitHubGallery()
     const repositories = getAllGalleryRepositories()
-    return NextResponse.json({
+    const blueprints = getAllProjectBlueprints()
+    return jsonWithCors({
       success: true,
       repositories,
+      blueprints,
       total: repositories.length
     })
   } catch (error: any) {
-    return NextResponse.json(
+    return jsonWithCors(
       { success: false, error: error.message || 'No se pudieron cargar los repositorios.' },
       { status: 500 }
     )
@@ -46,7 +72,7 @@ export async function POST(request: Request) {
       const rawUrl = String(body?.url || '').trim()
       const parsed = parseGitHubUrl(rawUrl)
       if (!parsed) {
-        return NextResponse.json(
+        return jsonWithCors(
           {
             success: false,
             error: 'Ingresá una URL válida de GitHub (ej. https://github.com/owner/repo o owner/repo).'
@@ -73,7 +99,7 @@ export async function POST(request: Request) {
       }
 
       const saved = saveGalleryRepoWithBookmark(mergedRepo)
-      return NextResponse.json({
+      return jsonWithCors({
         success: true,
         repository: saved,
         alreadyExisted: Boolean(existing)
@@ -243,14 +269,121 @@ export async function POST(request: Request) {
     if (action === 'reorder') {
       const customOrder = Array.isArray(body?.customOrder) ? body.customOrder : []
       saveGalleryCustomOrder(customOrder)
-      return NextResponse.json({
+      return jsonWithCors({
         success: true
       })
     }
 
-    return NextResponse.json({ success: false, error: `Acción no soportada: ${action}` }, { status: 400 })
+    if (action === 'import-github-stars') {
+      const username = String(body?.username || '').trim()
+      const page = Number(body?.page) || 1
+      const perPage = Number(body?.perPage) || 50
+      if (!username) {
+        return jsonWithCors(
+          { success: false, error: 'Ingresá un nombre de usuario de GitHub válido.' },
+          { status: 400 }
+        )
+      }
+
+      const starredRepos = await fetchUserStarredRepos(username, { page, perPage, token })
+      let added = 0
+      let updated = 0
+
+      for (const repo of starredRepos) {
+        const existing = getGalleryRepositoryByFullName(repo.fullName)
+        saveGalleryRepoWithBookmark(repo)
+        if (existing) {
+          updated++
+        } else {
+          added++
+        }
+      }
+
+      const repositories = getAllGalleryRepositories()
+      return jsonWithCors({
+        success: true,
+        username,
+        fetched: starredRepos.length,
+        added,
+        updated,
+        total: repositories.length,
+        repositories
+      })
+    }
+
+    if (action === 'expand-short-links') {
+      const limit = Number(body?.limit) || 30
+      const stats = await expandShortenedUrlsBatch(limit)
+      const repositories = getAllGalleryRepositories()
+      return jsonWithCors({
+        success: true,
+        ...stats,
+        total: repositories.length,
+        repositories
+      })
+    }
+
+    if (action === 'save-blueprint') {
+      const bpInput = body?.blueprint as Partial<ProjectBlueprint> & { name?: string }
+      if (!bpInput || !bpInput.name || !bpInput.name.trim()) {
+        return jsonWithCors(
+          { success: false, error: 'El proyecto necesita un nombre válido.' },
+          { status: 400 }
+        )
+      }
+      const blueprint = upsertProjectBlueprint({
+        ...bpInput,
+        name: bpInput.name.trim()
+      })
+      return jsonWithCors({
+        success: true,
+        blueprint,
+        blueprints: getAllProjectBlueprints()
+      })
+    }
+
+    if (action === 'delete-blueprint') {
+      const id = String(body?.id || '').trim()
+      if (!id) {
+        return jsonWithCors({ success: false, error: 'ID de proyecto requerido.' }, { status: 400 })
+      }
+      deleteProjectBlueprint(id)
+      return jsonWithCors({
+        success: true,
+        blueprints: getAllProjectBlueprints()
+      })
+    }
+
+    if (action === 'generate-master-prompt') {
+      const bpInput = body?.blueprint as ProjectBlueprint | undefined
+      const blueprintId = String(body?.blueprintId || bpInput?.id || '')
+      const allBlueprints = getAllProjectBlueprints()
+      const blueprint =
+        bpInput && bpInput.name
+          ? bpInput
+          : allBlueprints.find(b => b.id === blueprintId) || allBlueprints[0]
+
+      if (!blueprint) {
+        return jsonWithCors(
+          { success: false, error: 'No se encontró el proyecto para generar el prompt.' },
+          { status: 404 }
+        )
+      }
+
+      const repos = getAllGalleryRepositories()
+      const bookmarks = getAllBookmarks()
+      const markdown = generateProjectMasterPrompt({ blueprint, repos, bookmarks })
+
+      return jsonWithCors({
+        success: true,
+        markdown,
+        blueprint
+      })
+    }
+
+    return jsonWithCors({ success: false, error: `Acción no soportada: ${action}` }, { status: 400 })
   } catch (error: any) {
-    return NextResponse.json(
+    return jsonWithCors(
       { success: false, error: error.message || 'Error al procesar la operación de repositorios.' },
       { status: 500 }
     )

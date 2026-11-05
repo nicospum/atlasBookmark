@@ -8,6 +8,7 @@ import {
   GalleryRepoRelease,
   GalleryRepository,
   LinkedResource,
+  ProjectBlueprint,
   ResourceType,
   SourcePlatform,
   StorageDiagnostics
@@ -192,6 +193,18 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_github_repos_stars ON github_repos(stars DESC);
   CREATE INDEX IF NOT EXISTS idx_github_repos_order ON github_repos(custom_order ASC);
+
+  CREATE TABLE IF NOT EXISTS project_blueprints (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    goal TEXT DEFAULT '',
+    repo_full_names_json TEXT DEFAULT '[]',
+    bookmark_ids_json TEXT DEFAULT '[]',
+    notes TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `)
 
 // Ensure new unified columns exist if migrating an older atlas.db
@@ -578,6 +591,7 @@ function migrateAndBackfillOnStartup() {
 
     rebuildFtsIndex()
     syncBookmarksToGitHubGallery(false)
+    seedDefaultBlueprintIfNeeded()
   } catch (err) {
     console.error('[ATLAS DB] Error en migración/backfill inicial:', err)
   }
@@ -1058,6 +1072,116 @@ export function syncBookmarksToGitHubGallery(force = true): { totalRepos: number
     console.warn('[ATLAS DB] No se pudo sincronizar galería de GitHub:', err)
     return { totalRepos: 0, linkedRepos: 0 }
   }
+}
+
+export function parseProjectBlueprintRow(row: any): ProjectBlueprint {
+  const safeArr = (val: string | null | undefined): string[] => {
+    if (!val) return []
+    try {
+      const parsed = JSON.parse(val)
+      return Array.isArray(parsed) ? parsed.map(String) : []
+    } catch {
+      return []
+    }
+  }
+  return {
+    id: String(row.id),
+    name: String(row.name || 'Proyecto sin nombre'),
+    description: String(row.description || ''),
+    goal: String(row.goal || ''),
+    repoFullNames: safeArr(row.repo_full_names_json),
+    bookmarkIds: safeArr(row.bookmark_ids_json),
+    notes: String(row.notes || ''),
+    createdAt: String(row.created_at || new Date().toISOString()),
+    updatedAt: String(row.updated_at || new Date().toISOString())
+  }
+}
+
+export function getAllProjectBlueprints(): ProjectBlueprint[] {
+  try {
+    const rows = db.prepare('SELECT * FROM project_blueprints ORDER BY updated_at DESC').all()
+    return rows.map(parseProjectBlueprintRow)
+  } catch {
+    return []
+  }
+}
+
+export function upsertProjectBlueprint(
+  input: Partial<ProjectBlueprint> & { name: string }
+): ProjectBlueprint {
+  const now = new Date().toISOString()
+  const id = input.id || `bp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  const existingRow = db.prepare('SELECT * FROM project_blueprints WHERE id = ?').get(id) as any
+  const existing = existingRow ? parseProjectBlueprintRow(existingRow) : null
+
+  const finalBp: ProjectBlueprint = {
+    id,
+    name: input.name.trim() || existing?.name || 'Nuevo Proyecto IA',
+    description: input.description !== undefined ? input.description : existing?.description || '',
+    goal: input.goal !== undefined ? input.goal : existing?.goal || '',
+    repoFullNames: Array.from(
+      new Set(input.repoFullNames !== undefined ? input.repoFullNames : existing?.repoFullNames || [])
+    ),
+    bookmarkIds: Array.from(
+      new Set(input.bookmarkIds !== undefined ? input.bookmarkIds : existing?.bookmarkIds || [])
+    ),
+    notes: input.notes !== undefined ? input.notes : existing?.notes || '',
+    createdAt: existing?.createdAt || input.createdAt || now,
+    updatedAt: now
+  }
+
+  db.prepare(`
+    INSERT OR REPLACE INTO project_blueprints (
+      id, name, description, goal, repo_full_names_json, bookmark_ids_json, notes, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    finalBp.id,
+    finalBp.name,
+    finalBp.description,
+    finalBp.goal,
+    JSON.stringify(finalBp.repoFullNames),
+    JSON.stringify(finalBp.bookmarkIds),
+    finalBp.notes,
+    finalBp.createdAt,
+    finalBp.updatedAt
+  )
+
+  return finalBp
+}
+
+export function deleteProjectBlueprint(id: string): boolean {
+  try {
+    const res = db.prepare('DELETE FROM project_blueprints WHERE id = ?').run(id)
+    return res.changes > 0
+  } catch {
+    return false
+  }
+}
+
+export function seedDefaultBlueprintIfNeeded() {
+  try {
+    const count = (db.prepare('SELECT COUNT(*) as c FROM project_blueprints').get() as { c: number }).c
+    if (count > 0) return
+
+    const topRepos = db
+      .prepare('SELECT full_name FROM github_repos ORDER BY stars DESC, repo_id ASC LIMIT 6')
+      .all() as Array<{ full_name: string }>
+    const repoNames = topRepos.map(r => r.full_name)
+    if (repoNames.length === 0) return
+
+    upsertProjectBlueprint({
+      id: 'bp-starter-ai-stack',
+      name: 'Stack Agentes, Skills & MCP para Desarrollo IA',
+      description:
+        'Blueprint inicial generado automáticamente con repositorios clave de tu galería para potenciar flujos con Claude Code, Cursor y Antigravity.',
+      goal:
+        'Integrar skills reutilizables, servidores MCP y subagentes especializados en nuestro entorno de desarrollo asistido por IA.',
+      repoFullNames: repoNames,
+      bookmarkIds: [],
+      notes:
+        'Puedes agregar o quitar repositorios desde la Galería de Repositorios y exportar este proyecto como PROMPT_MAESTRO.md o CLAUDE.md.'
+    })
+  } catch {}
 }
 
 export function getStorageDiagnostics(): StorageDiagnostics {

@@ -9,6 +9,8 @@ import type {
   GalleryRepoLanguage,
   GalleryRepoRelease,
   GalleryRepository,
+  InstallSnippetInfo,
+  ProjectBlueprint,
   RateLimitInfo,
   ResourceType
 } from './types'
@@ -834,11 +836,11 @@ export async function searchGitHubDiscover(
     const license = item.license?.spdx_id || item.license?.name || null
     const pushedAt = item.pushed_at || item.updated_at || new Date().toISOString()
 
-    const resourceType = inferResourceType({
-      caption: `${fullName} ${description} ${topics.join(' ')}`,
-      urls: [`https://github.com/${fullName}`],
+    const resourceType = inferResourceType(
+      `${fullName} ${description} ${topics.join(' ')}`,
+      [`https://github.com/${fullName}`],
       topics
-    })
+    )
 
     const shortExplanationEs = `${resourceType}: ${description}`
 
@@ -1485,3 +1487,405 @@ export function parseGalleryImportJson(jsonText: string): {
 
   return { repositories: validRepos, customOrder }
 }
+
+/**
+ * Extracts CLI installation commands (npx, claude mcp add, uvx, pip, npm, docker, git clone)
+ * and ready-to-paste MCP server JSON config from a repository's metadata and README.
+ */
+export function extractInstallAndSetupSnippets(
+  repo: Partial<GalleryRepository> & { owner: string; name: string }
+): InstallSnippetInfo {
+  const fullName = `${repo.owner}/${repo.name}`
+  const repoUrl = repo.url || `https://github.com/${fullName}`
+  const combinedText = [
+    repo.description || '',
+    repo.shortExplanationEs || '',
+    repo.longExplanationEs || '',
+    repo.readme || ''
+  ].join('\n')
+
+  const foundCommands: string[] = []
+  const cmdRegexes: Array<{ rx: RegExp; kind: InstallSnippetInfo['installKind'] }> = [
+    { rx: /\b((?:npx|bunx)\s+(?:-y\s+)?[@a-zA-Z0-9_./-]+(?:\s+[a-zA-Z0-9_./-]+)*)/g, kind: 'npx' },
+    { rx: /\b(claude\s+mcp\s+add\s+[^\r\n`"]+)/g, kind: 'mcp' },
+    { rx: /\b(uvx\s+[@a-zA-Z0-9_./-]+(?:\s+[a-zA-Z0-9_./-]+)*)/g, kind: 'uv' },
+    { rx: /\b(pip3?\s+install\s+(?:-U\s+)?[a-zA-Z0-9_.\-[\]]+(?:\s+[a-zA-Z0-9_.\-[\]]+)*)/g, kind: 'pip' },
+    { rx: /\b((?:npm|pnpm|yarn|bun)\s+(?:install|i|add)\s+(?:-[gD]\s+)?[@a-zA-Z0-9_./-]+)/g, kind: 'npm' },
+    { rx: /\b(cargo\s+install\s+[a-zA-Z0-9_-]+)/g, kind: 'cargo' },
+    { rx: /\b(docker\s+(?:run|pull)\s+[^\r\n`"]+)/g, kind: 'docker' },
+    { rx: /\b(git\s+clone\s+https?:\/\/github\.com\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+)/g, kind: 'git' }
+  ]
+
+  let detectedKind: InstallSnippetInfo['installKind'] | null = null
+
+  for (const { rx, kind } of cmdRegexes) {
+    let m: RegExpExecArray | null
+    while ((m = rx.exec(combinedText)) !== null) {
+      const cmd = m[1].trim().replace(/[.,;]+$/, '')
+      if (cmd.length >= 8 && cmd.length <= 140 && !foundCommands.includes(cmd)) {
+        foundCommands.push(cmd)
+        if (!detectedKind) detectedKind = kind
+      }
+    }
+  }
+
+  const isMcp =
+    repo.resourceType === 'Servidor MCP o conector' ||
+    /\bmcp\b/i.test(fullName) ||
+    (repo.topics || []).some(t => /mcp/i.test(t))
+  const isSkill =
+    repo.resourceType === 'Skill' ||
+    /\bskills?\b/i.test(fullName) ||
+    (repo.topics || []).some(t => /skill/i.test(t))
+
+  const gitCloneCmd = `git clone ${repoUrl}.git`
+  if (!foundCommands.includes(gitCloneCmd)) {
+    foundCommands.push(gitCloneCmd)
+  }
+
+  let primaryCommand = foundCommands[0] || gitCloneCmd
+  let installKind: InstallSnippetInfo['installKind'] =
+    detectedKind || (isMcp ? 'mcp' : isSkill ? 'skill' : 'git')
+
+  let mcpConfigJson: string | undefined
+  if (isMcp) {
+    const serverKey = repo.name.toLowerCase().replace(/[^a-z0-9_-]/g, '-')
+    const npxMatch = foundCommands.find(c => c.startsWith('npx ') || c.startsWith('uvx '))
+    if (npxMatch) {
+      const parts = npxMatch.split(/\s+/)
+      const cmdBin = parts[0]
+      const args = parts.slice(1)
+      mcpConfigJson = JSON.stringify(
+        {
+          mcpServers: {
+            [serverKey]: {
+              command: cmdBin,
+              args: args.includes('-y') || cmdBin === 'uvx' ? args : ['-y', ...args]
+            }
+          }
+        },
+        null,
+        2
+      )
+    } else {
+      mcpConfigJson = JSON.stringify(
+        {
+          mcpServers: {
+            [serverKey]: {
+              command: 'npx',
+              args: ['-y', `github:${fullName}`]
+            }
+          }
+        },
+        null,
+        2
+      )
+    }
+  }
+
+  const category: NonNullable<InstallSnippetInfo['category']> = isMcp
+    ? 'mcp'
+    : isSkill
+    ? 'skill'
+    : detectedKind === 'npx' || detectedKind === 'npm'
+    ? 'npm'
+    : detectedKind === 'pip' || detectedKind === 'uv'
+    ? 'pip'
+    : detectedKind === 'docker'
+    ? 'docker'
+    : 'git'
+
+  return {
+    primaryCommand,
+    commands: foundCommands.slice(0, 5),
+    allCommands: foundCommands.slice(0, 5),
+    mcpConfigJson,
+    category,
+    installKind
+  }
+}
+
+/**
+ * Fetch starred repositories for a GitHub username (`GET /users/{username}/starred`).
+ */
+export async function fetchUserStarredRepos(
+  username: string,
+  options: { page?: number; perPage?: number; token?: string | null } = {}
+): Promise<GalleryRepository[]> {
+  const cleanUser = (username || '').trim().replace(/^@/, '')
+  if (!cleanUser) {
+    throw new Error('Ingresá un nombre de usuario de GitHub válido.')
+  }
+  const page = Math.max(1, options.page || 1)
+  const perPage = Math.min(100, Math.max(10, options.perPage || 40))
+  const headers = getGitHubHeaders(options.token)
+
+  const url = `https://api.github.com/users/${encodeURIComponent(
+    cleanUser
+  )}/starred?per_page=${perPage}&page=${page}&sort=created&direction=desc`
+
+  const res = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(12000)
+  })
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      throw new Error(`No se encontró el usuario de GitHub "@${cleanUser}".`)
+    }
+    if (res.status === 403 || res.status === 429) {
+      throw new Error(
+        'Se alcanzó el límite de peticiones de GitHub API. Configurá tu Personal Access Token en Ajustes (Token & IA).'
+      )
+    }
+    throw new Error(`Error al consultar GitHub Stars de @${cleanUser} (HTTP ${res.status}).`)
+  }
+
+  const items = await res.json()
+  if (!Array.isArray(items)) return []
+
+  return items.map((item: any) => {
+    const owner = item.owner?.login || cleanUser
+    const name = item.name || 'repo'
+    const fullName = item.full_name || `${owner}/${name}`
+    const topics = Array.isArray(item.topics) ? item.topics : []
+    const partial: GalleryRepository = {
+      id: Number(item.id) || numericIdFromFullName(fullName),
+      owner,
+      name,
+      fullName,
+      url: item.html_url || `https://github.com/${fullName}`,
+      avatarUrl: item.owner?.avatar_url || `https://github.com/${owner}.png?size=128`,
+      description: item.description || 'Sin descripción provista.',
+      explanation: item.description || 'Sin descripción provista.',
+      imageUrl: `https://opengraph.githubassets.com/1/${owner}/${name}`,
+      imageSource: 'opengraph',
+      stars: item.stargazers_count ?? 0,
+      forks: item.forks_count ?? 0,
+      openIssues: item.open_issues_count ?? 0,
+      primaryLanguage: item.language || null,
+      languages: item.language ? [{ name: item.language, bytes: 100, percentage: 100 }] : [],
+      topics,
+      license: item.license?.spdx_id || item.license?.name || null,
+      createdAt: item.created_at || new Date().toISOString(),
+      updatedAt: item.updated_at || new Date().toISOString(),
+      pushedAt: item.pushed_at || item.updated_at || new Date().toISOString(),
+      latestRelease: null,
+      addedAt: new Date().toISOString(),
+      homepage: item.homepage || null,
+      defaultBranch: item.default_branch || 'main'
+    }
+    const synth = buildDeterministicSpanishExplanations(partial)
+    partial.shortExplanationEs = synth.shortExplanationEs
+    partial.longExplanationEs = synth.longExplanationEs
+    partial.explanation = synth.shortExplanationEs
+    partial.resourceType = synth.resourceType
+    return partial
+  })
+}
+
+/**
+ * Generates a side-by-side comparative analysis in Spanish across 2 to 4 repositories.
+ */
+export async function compareRepositoriesServer(
+  repos: GalleryRepository[],
+  providerId?: AiProviderId,
+  model?: string
+): Promise<string> {
+  if (!Array.isArray(repos) || repos.length < 2) {
+    return 'Seleccioná al menos 2 repositorios para compararlos.'
+  }
+
+  const promptItems = repos
+    .map((r, i) => {
+      const install = extractInstallAndSetupSnippets(r)
+      return [
+        `${i + 1}. ${r.fullName} (${r.url})`,
+        `   - Tipo: ${r.resourceType || 'Repositorio'}`,
+        `   - Lenguaje: ${r.primaryLanguage || 'Multi-lenguaje'}`,
+        `   - Estrellas: ${r.stars} | Forks: ${r.forks} | Issues: ${r.openIssues}`,
+        `   - Licencia: ${r.license || 'No especificada'}`,
+        `   - Última actividad: ${r.pushedAt || r.updatedAt}`,
+        `   - Comando principal: ${install.primaryCommand}`,
+        `   - Propósito: ${r.shortExplanationEs || r.description}`
+      ].join('\n')
+    })
+    .join('\n\n')
+
+  if (providerId !== 'local_rules' && providerId !== 'deterministic') {
+    const llmText = await generateTextWithConfiguredProvider({
+      system:
+        'Eres un arquitecto de software e IA experto. Compara los repositorios de GitHub dados en español claro, estructurado y práctico para ayudar al usuario a elegir cuál usar en su proyecto.',
+      messages: [
+        {
+          role: 'user',
+          content: `Compara estos ${repos.length} repositorios de GitHub:\n\n${promptItems}\n\nIncluye:\n1. Diferencia clave de enfoque entre ellos.\n2. Madurez, actividad y licencia.\n3. Recomendación directa ("Cuándo elegir cada uno").`
+        }
+      ],
+      providerId,
+      model
+    })
+    if (llmText) return llmText
+  }
+
+  // Deterministic structured comparison in Spanish
+  const sortedByStars = [...repos].sort((a, b) => (b.stars || 0) - (a.stars || 0))
+  const sortedByRecent = [...repos].sort(
+    (a, b) =>
+      new Date(b.pushedAt || b.updatedAt || 0).getTime() -
+      new Date(a.pushedAt || a.updatedAt || 0).getTime()
+  )
+
+  const lines: string[] = []
+  lines.push(`### Dictamen Comparativo (${repos.map(r => r.fullName).join(' vs ')})`)
+  lines.push('')
+  lines.push(
+    `- **Mayor adopción y comunidad:** **${sortedByStars[0].fullName}** (${
+      sortedByStars[0].stars > 0
+        ? `★ ${sortedByStars[0].stars.toLocaleString()} estrellas`
+        : 'referenciado en tus guardados'
+    }).`
+  )
+  lines.push(
+    `- **Mantenimiento más reciente:** **${sortedByRecent[0].fullName}** (última actualización registrada: ${formatDateEs(
+      sortedByRecent[0].pushedAt || sortedByRecent[0].updatedAt
+    )}).`
+  )
+  lines.push('')
+  lines.push('#### Cuándo elegir cada repositorio:')
+  for (const r of repos) {
+    const snippet = extractInstallAndSetupSnippets(r)
+    const permissive =
+      r.license && /mit|apache|bsd|isc/i.test(r.license)
+        ? `Licencia permisiva (${r.license}) apta para productos comerciales.`
+        : r.license
+        ? `Licencia ${r.license}.`
+        : 'Verificar archivo LICENSE en el repo.'
+    lines.push(
+      `- **${r.fullName}** (*${r.resourceType || 'Repositorio'}*${
+        r.primaryLanguage ? ` · ${r.primaryLanguage}` : ''
+      }): Ideal si buscás **${
+        r.shortExplanationEs || r.description
+      }**. ${permissive} Instalación rápida: \`${snippet.primaryCommand}\`.`
+    )
+  }
+
+  return lines.join('\n')
+}
+
+/**
+ * Builds a complete, structured Master Prompt (PROMPT_MAESTRO.md / CLAUDE.md / AGENTS.md)
+ * from a ProjectBlueprint, its selected GitHub repositories, and any linked saved bookmarks.
+ */
+export function generateProjectMasterPrompt(params: {
+  blueprint: ProjectBlueprint
+  repos: GalleryRepository[]
+  bookmarks?: BookmarkItem[]
+}): string {
+  const { blueprint, repos, bookmarks = [] } = params
+  const selectedSet = new Set((blueprint.repoFullNames || []).map(n => n.toLowerCase()))
+  const chosenRepos = repos.filter(r => selectedSet.has(r.fullName.toLowerCase()))
+
+  const bmById = new Map<string, BookmarkItem>()
+  for (const b of bookmarks) bmById.set(b.id, b)
+
+  const out: string[] = []
+  out.push(`# PROMPT MAESTRO DE CONSTRUCCIÓN — ${blueprint.name}`)
+  out.push(
+    `> **Instrucción directa para el Agente Programador (Claude Code / Cursor / Antigravity / Codex)**`
+  )
+  out.push(
+    `> Utilizá este documento de arquitectura y los repositorios seleccionados de mi catálogo como base técnica obligatoria para construir o integrar este proyecto.`
+  )
+  out.push('')
+  out.push(`## 1. Visión y Objetivo del Proyecto`)
+  out.push(`- **Nombre del proyecto:** ${blueprint.name}`)
+  if (blueprint.description) {
+    out.push(`- **Descripción:** ${blueprint.description}`)
+  }
+  if (blueprint.goal) {
+    out.push(`- **Objetivo técnico principal:** ${blueprint.goal}`)
+  }
+  if (blueprint.notes) {
+    out.push(`- **Notas y restricciones de diseño:** ${blueprint.notes}`)
+  }
+  out.push('')
+  out.push(`## 2. Stack de Repositorios, Skills y Servidores MCP Seleccionados (${chosenRepos.length})`)
+  out.push('')
+
+  if (chosenRepos.length === 0) {
+    out.push(`*(Aún no se seleccionaron repositorios para este proyecto).*`)
+  } else {
+    out.push(`| Repositorio | Tipo | Lenguaje | Estrellas | Propósito en el proyecto |`)
+    out.push(`| :--- | :--- | :--- | :--- | :--- |`)
+    for (const r of chosenRepos) {
+      out.push(
+        `| [**${r.fullName}**](${r.url}) | ${r.resourceType || 'Repositorio'} | ${
+          r.primaryLanguage || 'Multi'
+        } | ${r.stars > 0 ? `★ ${r.stars.toLocaleString()}` : '—'} | ${(
+          r.shortExplanationEs || r.description
+        ).replace(/\|/g, '·')} |`
+      )
+    }
+    out.push('')
+    out.push(`## 3. Ficha de Integración e Instalación por Repositorio`)
+    out.push('')
+
+    chosenRepos.forEach((r, idx) => {
+      const setup = extractInstallAndSetupSnippets(r)
+      out.push(`### 3.${idx + 1}. ${r.fullName} — [${r.resourceType || 'Repositorio'}]`)
+      out.push(`- **URL oficial:** ${r.url}`)
+      if (r.homepage) out.push(`- **Sitio / Documentación:** ${r.homepage}`)
+      if (r.primaryLanguage) out.push(`- **Lenguaje principal:** ${r.primaryLanguage}`)
+      if (r.license) out.push(`- **Licencia:** ${r.license}`)
+      out.push(`- **Qué es y para qué sirve:** ${r.shortExplanationEs || r.description}`)
+      if (r.longExplanationEs && r.longExplanationEs !== r.shortExplanationEs) {
+        out.push(`- **Detalle técnico:** ${r.longExplanationEs.replace(/\n+/g, ' ')}`)
+      }
+      if (r.notes) {
+        out.push(`- **Notas de uso:** ${r.notes}`)
+      }
+      out.push(`- **Comando de instalación / clonado:**`)
+      out.push('```bash')
+      out.push(setup.primaryCommand)
+      out.push('```')
+      if (setup.mcpConfigJson) {
+        out.push(`- **Configuración MCP sugerida (\`mcp.json\`):**`)
+        out.push('```json')
+        out.push(setup.mcpConfigJson)
+        out.push('```')
+      }
+
+      // Include context from linked saved posts if present
+      const linkedBms = (r.linkedBookmarkIds || [])
+        .map(id => bmById.get(id))
+        .filter((b): b is BookmarkItem => Boolean(b && b.platform !== 'github'))
+
+      if (linkedBms.length > 0) {
+        out.push(`- **Contexto capturado de mis guardados (${linkedBms.length}):**`)
+        for (const bm of linkedBms.slice(0, 2)) {
+          out.push(
+            `  - *${bm.authorName} (${bm.authorHandle}) en ${bm.platform.toUpperCase()}*: "${bm.caption
+              .replace(/\s+/g, ' ')
+              .slice(0, 280)}..."`
+          )
+        }
+      }
+      out.push('')
+    })
+  }
+
+  out.push(`## 4. Plan de Ejecución para el Agente`)
+  out.push(
+    `1. **Inspeccionar y preparar dependencias:** Revisar los repositorios listados arriba, verificar compatibilidad de licencias y lenguajes, e instalar las Skills o Servidores MCP necesarios.`
+  )
+  out.push(
+    `2. **Diseñar la arquitectura:** Integrar los componentes reutilizando los módulos existentes sin duplicar lógica.`
+  )
+  out.push(
+    `3. **Implementar y verificar:** Construir el flujo de punta a punta y validar con pruebas automatizadas.`
+  )
+
+  return out.join('\n')
+}
+

@@ -4,7 +4,8 @@ import {
   explainRepoWithAiServer,
   askRepoAssistantServer,
   askGalleryAssistantServer,
-  fetchRepositoryReadme
+  fetchRepositoryReadme,
+  compareRepositoriesServer
 } from '@/lib/github-gallery'
 import {
   getAllGalleryRepositories,
@@ -119,6 +120,21 @@ export async function POST(request: Request) {
       return NextResponse.json({
         success: true,
         answer
+      })
+    }
+
+    if (action === 'compare-repos') {
+      const reposInput: GalleryRepository[] = Array.isArray(body?.repos) ? body.repos : []
+      if (reposInput.length < 2) {
+        return NextResponse.json(
+          { success: false, error: 'Seleccioná al menos 2 repositorios para comparar.' },
+          { status: 400 }
+        )
+      }
+      const comparison = await compareRepositoriesServer(reposInput, provider)
+      return NextResponse.json({
+        success: true,
+        comparison
       })
     }
 

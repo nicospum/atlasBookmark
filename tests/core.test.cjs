@@ -38,7 +38,8 @@ const {
 } = require('../lib/ai-analyzer.ts')
 const {
   isSafeExternalUrl,
-  classifyGitHubUrl
+  classifyGitHubUrl,
+  isShortenerUrl
 } = require('../lib/resource-investigator.ts')
 const {
   getAllBookmarks,
@@ -50,7 +51,10 @@ const {
   getAllGalleryRepositories,
   getGalleryRepositoryByFullName,
   saveGalleryRepoWithBookmark,
-  syncBookmarksToGitHubGallery
+  syncBookmarksToGitHubGallery,
+  getAllProjectBlueprints,
+  upsertProjectBlueprint,
+  deleteProjectBlueprint
 } = require('../lib/bookmarks-repository.ts')
 const {
   parseGitHubUrl,
@@ -58,7 +62,10 @@ const {
   parseGalleryImportJson,
   galleryRepoToBookmarkItem,
   explainRepoWithAiServer,
-  askGalleryAssistantServer
+  askGalleryAssistantServer,
+  extractInstallAndSetupSnippets,
+  compareRepositoriesServer,
+  generateProjectMasterPrompt
 } = require('../lib/github-gallery.ts')
 const { db } = require('../lib/db.ts')
 const {
@@ -601,6 +608,61 @@ test('GitHub Visual Gallery integration: bidirectional sync, bulk text extractio
     provider: 'deterministic'
   })
   assert.ok(chatReply.includes('VoltAgent/awesome-claude-code-subagents') || chatReply.includes('pbakaus/impeccable'))
+})
+
+test('1-Click install snippets, MCP config JSON, side-by-side comparator, shortener detection and Project Blueprint PROMPT_MAESTRO generator', async () => {
+  // 1. Shortener URL detection
+  assert.equal(isShortenerUrl('https://t.co/abc123XYZ'), true)
+  assert.equal(isShortenerUrl('https://bit.ly/3xyz'), true)
+  assert.equal(isShortenerUrl('https://github.com/anthropics/skills'), false)
+
+  // 2. 1-Click install snippet extraction + MCP config JSON generation
+  const mcpSnip = extractInstallAndSetupSnippets({
+    owner: 'modelcontextprotocol',
+    name: 'servers',
+    fullName: 'modelcontextprotocol/servers',
+    resourceType: 'Servidor MCP o conector',
+    primaryLanguage: 'TypeScript',
+    readme: 'Install quickly:\n$ npx -y @modelcontextprotocol/server-filesystem /path\n'
+  })
+  assert.equal(mcpSnip.category, 'mcp')
+  assert.ok(mcpSnip.primaryCommand.includes('npx -y @modelcontextprotocol/server-filesystem'))
+  assert.ok(mcpSnip.mcpConfigJson && mcpSnip.mcpConfigJson.includes('"mcpServers"'))
+
+  // 3. Side-by-side repository comparator (deterministic Spanish verdict)
+  const allRepos = getAllGalleryRepositories()
+  assert.ok(allRepos.length >= 2)
+  const comparison = await compareRepositoriesServer(allRepos.slice(0, 2), 'deterministic')
+  assert.ok(comparison.includes('Dictamen Comparativo'))
+  assert.ok(comparison.includes(allRepos[0].fullName))
+  assert.ok(comparison.includes(allRepos[1].fullName))
+
+  // 4. Project Blueprints CRUD & PROMPT_MAESTRO.md generation
+  const bp = upsertProjectBlueprint({
+    id: 'bp-test-stack',
+    name: 'Proyecto Agentes IA & Video',
+    description: 'Stack de prueba para agentes autónomos.',
+    goal: 'Construir un flujo automatizado con Claude Code y servidores MCP.',
+    repoFullNames: allRepos.slice(0, 2).map(r => r.fullName),
+    bookmarkIds: ['x:3001'],
+    notes: 'Priorizar arquitectura limpia en TypeScript.'
+  })
+  assert.equal(bp.id, 'bp-test-stack')
+  assert.equal(bp.repoFullNames.length, 2)
+
+  const listBp = getAllProjectBlueprints()
+  assert.ok(listBp.some(b => b.id === 'bp-test-stack'))
+
+  const masterMarkdown = generateProjectMasterPrompt({
+    blueprint: bp,
+    repos: allRepos,
+    bookmarks: getAllBookmarks()
+  })
+  assert.ok(masterMarkdown.includes('# PROMPT MAESTRO DE CONSTRUCCIÓN'))
+  assert.ok(masterMarkdown.includes('Proyecto Agentes IA & Video'))
+  assert.ok(masterMarkdown.includes(allRepos[0].fullName))
+
+  assert.equal(deleteProjectBlueprint('bp-test-stack'), true)
 })
 
 after(() => {

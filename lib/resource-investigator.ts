@@ -608,6 +608,76 @@ function decodeHtml(str: string): string {
     .trim()
 }
 
+const SHORTENER_HOSTS = new Set([
+  't.co',
+  'bit.ly',
+  'tinyurl.com',
+  'buff.ly',
+  'ow.ly',
+  'is.gd',
+  'rb.gy',
+  'lnkd.in',
+  'trib.al',
+  'dlvr.it',
+  'ift.tt'
+])
+
+export function isShortenerUrl(rawUrl: string): boolean {
+  try {
+    const cleaned = cleanUrlString(rawUrl)
+    if (!cleaned) return false
+    const host = new URL(cleaned).hostname.toLowerCase().replace(/^www\./, '')
+    return SHORTENER_HOSTS.has(host)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Resolves shortened URLs (t.co, bit.ly, tinyurl.com, etc.) via HTTP redirects
+ * and HTML meta-refresh / title fallbacks (used by t.co).
+ */
+export async function resolveShortenedUrl(rawUrl: string): Promise<string | null> {
+  const cleaned = cleanUrlString(rawUrl)
+  if (!cleaned || !isSafeExternalUrl(cleaned)) return null
+
+  try {
+    const initialHost = new URL(cleaned).hostname.toLowerCase().replace(/^www\./, '')
+    const res = await fetch(cleaned, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(4500),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; AtlasBookmarkInvestigator/2.0)'
+      }
+    })
+
+    if (res.url && res.url !== cleaned) {
+      const destHost = new URL(res.url).hostname.toLowerCase().replace(/^www\./, '')
+      if (destHost !== initialHost && isSafeExternalUrl(res.url)) {
+        return cleanUrlString(res.url)
+      }
+    }
+
+    // t.co often returns HTTP 200 with <META http-equiv="refresh" content="0;URL=..."> or <title>https://...</title>
+    const html = (await res.text()).slice(0, 6000)
+    const metaMatch =
+      html.match(/content=["']\d+\s*;\s*URL=([^"'>\s]+)["']/i) ||
+      html.match(/location\.replace\(\s*["']([^"']+)["']\s*\)/i) ||
+      html.match(/<title[^>]*>\s*(https?:\/\/[^\s<]+)\s*<\/title>/i)
+
+    if (metaMatch && metaMatch[1]) {
+      const candidate = cleanUrlString(metaMatch[1].replace(/&amp;/g, '&'))
+      if (candidate && isSafeExternalUrl(candidate)) {
+        return candidate
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Live network investigation of a single resource URL with SSRF protection,
  * redirect resolution, GitHub REST API / HTML fallback, and GitHub link discovery on web pages.
@@ -655,19 +725,11 @@ export async function investigateResourceUrlLive(
     let targetUrl = cleaned
     const provenanceChain = [cleaned]
 
-    // Resolve t.co or shortlinks first via HEAD/GET with redirect: follow
-    const initialHost = new URL(cleaned).hostname.toLowerCase()
-    if (initialHost === 't.co' || initialHost === 'bit.ly' || initialHost === 'tinyurl.com') {
-      const redirRes = await fetch(cleaned, {
-        method: 'GET',
-        redirect: 'follow',
-        signal: AbortSignal.timeout(5500),
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; AtlasBookmarkInvestigator/2.0)'
-        }
-      })
-      if (redirRes.url && isSafeExternalUrl(redirRes.url)) {
-        targetUrl = redirRes.url
+    // Resolve t.co or shortlinks first via HTTP redirect or t.co meta-refresh
+    if (isShortenerUrl(cleaned)) {
+      const resolved = await resolveShortenedUrl(cleaned)
+      if (resolved && isSafeExternalUrl(resolved)) {
+        targetUrl = resolved
         if (!provenanceChain.includes(targetUrl)) {
           provenanceChain.push(targetUrl)
         }

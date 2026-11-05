@@ -35,7 +35,12 @@ import {
   KeyRound,
   CheckCircle2,
   Loader2,
-  Globe
+  Globe,
+  Terminal,
+  Layers,
+  Columns,
+  Pause,
+  Link2
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -47,6 +52,8 @@ import type {
   CreatedAtFilterType,
   DiscoverCategory,
   GalleryRepository,
+  InstallSnippetInfo,
+  ProjectBlueprint,
   RateLimitInfo,
   RepoSortByType,
   ResourceType
@@ -231,6 +238,104 @@ function extractGitHubReposFromFreeText(text: string): Array<{ owner: string; re
   return out
 }
 
+function getRepoInstallSnippets(repo: GalleryRepository): InstallSnippetInfo {
+  const fullName = repo.fullName || `${repo.owner || 'owner'}/${repo.name || 'repo'}`
+  const name = repo.name || fullName.split('/')[1] || 'repo'
+  const readme = repo.readme || ''
+  const rType = repo.resourceType || 'Otro / pendiente de clasificar'
+  const lang = (repo.primaryLanguage || '').toLowerCase()
+
+  const commands: string[] = []
+  const cmdRegexes = [
+    /^\s*(?:\$\s*)?((?:npx|bunx|pnpx)\s+[^\r\n`#"]+)/gim,
+    /^\s*(?:\$\s*)?(claude\s+mcp\s+add[^\r\n`#"]+)/gim,
+    /^\s*(?:\$\s*)?(uvx\s+[^\r\n`#"]+)/gim,
+    /^\s*(?:\$\s*)?((?:pip|pip3|uv\s+pip|uv\s+tool)\s+install\s+[^\r\n`#"]+)/gim,
+    /^\s*(?:\$\s*)?((?:npm|pnpm|yarn|bun)\s+(?:install|i|add)\s+[^\r\n`#"]+)/gim,
+    /^\s*(?:\$\s*)?(cargo\s+install\s+[^\r\n`#"]+)/gim,
+    /^\s*(?:\$\s*)?(docker\s+(?:run|pull)\s+[^\r\n`#"]+)/gim,
+    /^\s*(?:\$\s*)?(git\s+clone\s+https?:\/\/github\.com\/[^\r\n`#"]+)/gim
+  ]
+
+  for (const rx of cmdRegexes) {
+    let m: RegExpExecArray | null
+    while ((m = rx.exec(readme)) !== null) {
+      const clean = m[1].trim().replace(/\s+/g, ' ')
+      if (clean.length >= 8 && clean.length <= 140 && !commands.includes(clean)) {
+        commands.push(clean)
+        if (commands.length >= 5) break
+      }
+    }
+    if (commands.length >= 5) break
+  }
+
+  let primaryCommand = commands[0] || ''
+  let category: InstallSnippetInfo['category'] = 'git'
+
+  if (!primaryCommand) {
+    if (rType === 'Skill') {
+      primaryCommand = `git clone https://github.com/${fullName}.git ~/.claude/skills/${name}`
+      category = 'skill'
+    } else if (rType === 'Servidor MCP o conector') {
+      if (lang === 'python') {
+        primaryCommand = `uvx --from git+https://github.com/${fullName} ${name}`
+      } else {
+        primaryCommand = `npx -y github:${fullName}`
+      }
+      category = 'mcp'
+    } else if (lang === 'python') {
+      primaryCommand = `git clone https://github.com/${fullName}.git && cd ${name} && pip install -e .`
+      category = 'pip'
+    } else if (lang === 'typescript' || lang === 'javascript') {
+      primaryCommand = `git clone https://github.com/${fullName}.git && cd ${name} && npm install`
+      category = 'npm'
+    } else {
+      primaryCommand = `git clone https://github.com/${fullName}.git`
+      category = 'git'
+    }
+    commands.unshift(primaryCommand)
+  } else {
+    if (/mcp/i.test(primaryCommand) || rType === 'Servidor MCP o conector') category = 'mcp'
+    else if (rType === 'Skill') category = 'skill'
+    else if (/^(?:npx|npm|pnpm|yarn|bun)/i.test(primaryCommand)) category = 'npm'
+    else if (/^(?:pip|uv)/i.test(primaryCommand)) category = 'pip'
+    else if (/^docker/i.test(primaryCommand)) category = 'docker'
+  }
+
+  let mcpConfigJson: string | undefined
+  if (rType === 'Servidor MCP o conector' || (repo.topics || []).some(t => t.includes('mcp'))) {
+    const serverKey = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-')
+    mcpConfigJson = JSON.stringify(
+      {
+        mcpServers: {
+          [serverKey]:
+            lang === 'python'
+              ? { command: 'uvx', args: ['--from', `git+https://github.com/${fullName}`, name] }
+              : { command: 'npx', args: ['-y', `github:${fullName}`] }
+        }
+      },
+      null,
+      2
+    )
+  }
+
+  return { primaryCommand, commands: commands.slice(0, 5), mcpConfigJson, category }
+}
+
+function getLicenseAssessment(license: string | null | undefined) {
+  if (!license || license === 'NOASSERTION') {
+    return { label: 'Sin especificar (Revisar repo)', cls: 'text-amber-300 border-amber-700/40 bg-amber-950/30' }
+  }
+  const upper = license.toUpperCase()
+  if (upper.includes('MIT') || upper.includes('APACHE') || upper.includes('BSD') || upper.includes('ISC') || upper.includes('0BSD')) {
+    return { label: `${license} · Comercial permitido ✅`, cls: 'text-emerald-300 border-emerald-700/40 bg-emerald-950/30' }
+  }
+  if (upper.includes('GPL') || upper.includes('AGPL')) {
+    return { label: `${license} · Copyleft / Restringido ⚠️`, cls: 'text-amber-300 border-amber-700/40 bg-amber-950/30' }
+  }
+  return { label: license, cls: 'text-zinc-300 border-border bg-[#161821]' }
+}
+
 export function ReposView({
   bookmarks,
   onOpenBookmarkDetail,
@@ -240,7 +345,7 @@ export function ReposView({
 }: ReposViewProps) {
   const [repositories, setRepositories] = useState<GalleryRepository[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [activeSubTab, setActiveSubTab] = useState<'gallery' | 'discover'>('gallery')
+  const [activeSubTab, setActiveSubTab] = useState<'gallery' | 'discover' | 'blueprints'>('gallery')
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid')
 
   // Search & filters
@@ -253,9 +358,10 @@ export function ReposView({
   const [originFilter, setOriginFilter] = useState<'all' | 'from_bookmarks' | 'direct'>('all')
   const [sortBy, setSortBy] = useState<RepoSortByType>('bookmarks_desc')
 
-  // Multi-selection
+  // Multi-selection & 1-click command copy
   const [selectedRepoKeys, setSelectedRepoKeys] = useState<Set<string>>(new Set())
   const [copiedType, setCopiedType] = useState<'urls' | 'markdown' | null>(null)
+  const [copiedCmdKey, setCopiedCmdKey] = useState<string | null>(null)
 
   // Detail modal
   const [detailRepo, setDetailRepo] = useState<GalleryRepository | null>(null)
@@ -265,7 +371,7 @@ export function ReposView({
   const [repoChatInput, setRepoChatInput] = useState('')
   const [isRepoChatLoading, setIsRepoChatLoading] = useState(false)
 
-  // Modals: Add URL, Bulk Text Import, Settings
+  // Modals: Add URL, Bulk Text Import, Settings, GitHub Stars, Comparator
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [addUrlInput, setAddUrlInput] = useState('')
   const [addNotesInput, setAddNotesInput] = useState('')
@@ -278,6 +384,25 @@ export function ReposView({
   const [isBulkImporting, setIsBulkImporting] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null)
 
+  const [isStarsModalOpen, setIsStarsModalOpen] = useState(false)
+  const [starsUsernameInput, setStarsUsernameInput] = useState('')
+  const [starsCountInput, setStarsCountInput] = useState(50)
+  const [isImportingStars, setIsImportingStars] = useState(false)
+  const [starsError, setStarsError] = useState<string | null>(null)
+
+  const [isCompareModalOpen, setIsCompareModalOpen] = useState(false)
+  const [compareVerdict, setCompareVerdict] = useState<string>('')
+  const [isComparingAi, setIsComparingAi] = useState(false)
+  const [copiedComparison, setCopiedComparison] = useState(false)
+
+  // Project Blueprints & Master Prompt Generator state
+  const [blueprints, setBlueprints] = useState<ProjectBlueprint[]>([])
+  const [activeBlueprintId, setActiveBlueprintId] = useState<string>('')
+  const [blueprintRepoSearch, setBlueprintRepoSearch] = useState('')
+  const [generatedMasterPrompt, setGeneratedMasterPrompt] = useState('')
+  const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false)
+  const [copiedMasterPrompt, setCopiedMasterPrompt] = useState(false)
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [githubToken, setGithubToken] = useState('')
   const [rateLimit, setRateLimit] = useState<RateLimitInfo | null>(null)
@@ -285,8 +410,15 @@ export function ReposView({
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([])
   const [selectedAiProvider, setSelectedAiProvider] = useState<AiProviderId>('gemini')
 
-  // Batch GitHub API enrichment state
+  // Progressive Batch GitHub API enrichment & Short-link expander state
   const [isBatchEnriching, setIsBatchEnriching] = useState(false)
+  const [batchEnrichProgress, setBatchEnrichProgress] = useState<{
+    processed: number
+    total: number
+    currentBatchLabel: string
+  } | null>(null)
+  const stopBatchEnrichRef = useRef(false)
+  const [isExpandingShortLinks, setIsExpandingShortLinks] = useState(false)
   const [statusBanner, setStatusBanner] = useState<{ type: 'ok' | 'info' | 'error'; text: string } | null>(null)
 
   // Discover state
@@ -335,6 +467,10 @@ export function ReposView({
       const data = await res.json()
       if (res.ok && data.success && Array.isArray(data.repositories)) {
         setRepositories(data.repositories)
+        if (Array.isArray(data.blueprints)) {
+          setBlueprints(data.blueprints)
+          setActiveBlueprintId(prev => prev || data.blueprints[0]?.id || '')
+        }
         setDetailRepo(prev => {
           if (!prev) return null
           return (
@@ -703,41 +839,61 @@ export function ReposView({
     }
   }
 
-  // Enrich single or batch of repos from GitHub API
+  // Enrich single or batch of repos from GitHub API with live progress & pause/stop support
   const handleEnrichReposWithGitHubApi = async (repoNames: string[]) => {
     if (repoNames.length === 0) return
     setIsBatchEnriching(true)
-    setStatusBanner({
-      type: 'info',
-      text: `Consultando GitHub API y README para ${repoNames.length} repositorio(s)...`
-    })
+    stopBatchEnrichRef.current = false
+    const total = repoNames.length
+    const chunkSize = 4
+    let processed = 0
+    let refreshedTotal = 0
+    let errorsTotal = 0
+
     try {
-      const res = await fetch('/api/github/repos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'refresh-repo',
-          repos: repoNames,
-          token: githubToken.trim() || undefined,
-          provider: selectedAiProvider
+      for (let i = 0; i < total; i += chunkSize) {
+        if (stopBatchEnrichRef.current) break
+        const chunk = repoNames.slice(i, i + chunkSize)
+        setBatchEnrichProgress({
+          processed,
+          total,
+          currentBatchLabel: chunk.join(', ')
         })
-      })
-      const data = await res.json()
-      if (res.ok && data.success) {
-        await fetchRepositories()
-        await onRefreshBookmarks()
-        setStatusBanner({
-          type: 'ok',
-          text: `Se enriquecieron ${data.refreshedCount} repositorio(s) con estrellas reales, lenguajes, imagen de README y análisis en español.${
-            data.errors?.length ? ` (${data.errors.length} omitidos por límite de API).` : ''
-          }`
+
+        const res = await fetch('/api/github/repos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'refresh-repo',
+            repos: chunk,
+            token: githubToken.trim() || undefined,
+            provider: selectedAiProvider
+          })
         })
-      } else {
-        setStatusBanner({
-          type: 'error',
-          text: data.error || 'No se pudieron enriquecer los repositorios.'
+        const data = await res.json()
+        if (res.ok && data.success) {
+          refreshedTotal += Number(data.refreshedCount) || 0
+          errorsTotal += Array.isArray(data.errors) ? data.errors.length : 0
+        } else {
+          errorsTotal += chunk.length
+        }
+
+        processed = Math.min(total, i + chunk.length)
+        setBatchEnrichProgress({
+          processed,
+          total,
+          currentBatchLabel: chunk.join(', ')
         })
       }
+
+      await fetchRepositories()
+      await onRefreshBookmarks()
+      setStatusBanner({
+        type: 'ok',
+        text: `${stopBatchEnrichRef.current ? 'Enriquecimiento pausado: ' : ''}Se enriquecieron ${refreshedTotal} de ${total} repositorio(s) con estrellas reales, lenguajes, imagen de README y análisis en español.${
+          errorsTotal > 0 ? ` (${errorsTotal} omitidos por límite de API).` : ''
+        }`
+      })
     } catch (err: any) {
       setStatusBanner({
         type: 'error',
@@ -745,7 +901,242 @@ export function ReposView({
       })
     } finally {
       setIsBatchEnriching(false)
+      setBatchEnrichProgress(null)
     }
+  }
+
+  // Expand shortened links (t.co / bit.ly) across saved bookmarks to uncover hidden GitHub repos
+  const handleExpandShortLinks = async () => {
+    setIsExpandingShortLinks(true)
+    setStatusBanner({
+      type: 'info',
+      text: 'Desacortando enlaces t.co / bit.ly en tus guardados para descubrir repositorios ocultos...'
+    })
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'expand-short-links', limit: 35 })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        await fetchRepositories()
+        await onRefreshBookmarks()
+        setStatusBanner({
+          type: 'ok',
+          text: `Desacortador completado: ${data.checkedBookmarks} guardados revisados, ${data.expandedUrls} enlaces expandidos y ${data.newGitHubRepos} nuevos repositorios de GitHub descubiertos.`
+        })
+      } else {
+        setStatusBanner({
+          type: 'error',
+          text: data.error || 'No se pudieron expandir los enlaces cortos.'
+        })
+      }
+    } catch (err: any) {
+      setStatusBanner({
+        type: 'error',
+        text: err.message || 'Error al expandir enlaces cortos.'
+      })
+    } finally {
+      setIsExpandingShortLinks(false)
+    }
+  }
+
+  // Import GitHub Stars from any username
+  const handleImportGitHubStars = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!starsUsernameInput.trim()) return
+    setIsImportingStars(true)
+    setStarsError(null)
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'import-github-stars',
+          username: starsUsernameInput.trim(),
+          perPage: starsCountInput,
+          token: githubToken.trim() || undefined
+        })
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'No se pudieron importar los GitHub Stars.')
+      }
+      await fetchRepositories()
+      await onRefreshBookmarks()
+      setIsStarsModalOpen(false)
+      setStatusBanner({
+        type: 'ok',
+        text: `⭐ Stars de @${data.username} importados: ${data.added} nuevos repositorios y ${data.updated} actualizados en tu Galería.`
+      })
+    } catch (err: any) {
+      setStarsError(err.message || 'Error al importar GitHub Stars.')
+    } finally {
+      setIsImportingStars(false)
+    }
+  }
+
+  // Copy 1-click CLI command
+  const handleCopyCmd = async (cmd: string, key: string, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    try {
+      await navigator.clipboard.writeText(cmd)
+      setCopiedCmdKey(key)
+      setTimeout(() => setCopiedCmdKey(null), 2000)
+    } catch {}
+  }
+
+  // Side-by-side repository comparator
+  const comparedRepos = useMemo(() => {
+    const selected = repositories.filter(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
+    if (selected.length >= 2) return selected.slice(0, 4)
+    return filteredRepositories.slice(0, 3)
+  }, [repositories, selectedRepoKeys, filteredRepositories])
+
+  const handleRunCompareAi = useCallback(
+    async (reposToCompare: GalleryRepository[]) => {
+      if (reposToCompare.length < 2) return
+      setIsComparingAi(true)
+      try {
+        const res = await fetch('/api/github/ai', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'compare-repos',
+            repos: reposToCompare,
+            provider: selectedAiProvider
+          })
+        })
+        const data = await res.json()
+        if (res.ok && data.comparison) {
+          setCompareVerdict(data.comparison)
+        }
+      } catch {
+        setCompareVerdict('No se pudo generar el veredicto comparativo.')
+      } finally {
+        setIsComparingAi(false)
+      }
+    },
+    [selectedAiProvider]
+  )
+
+  const handleOpenCompareModal = () => {
+    setIsCompareModalOpen(true)
+    handleRunCompareAi(comparedRepos)
+  }
+
+  // Project Blueprints & Master Prompt Generator helpers
+  const activeBlueprint = useMemo(
+    () => blueprints.find(b => b.id === activeBlueprintId) || blueprints[0] || null,
+    [blueprints, activeBlueprintId]
+  )
+
+  const handleSaveBlueprint = async (patch: Partial<ProjectBlueprint> & { name: string }) => {
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save-blueprint',
+          blueprint: patch
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success && Array.isArray(data.blueprints)) {
+        setBlueprints(data.blueprints)
+        if (data.blueprint?.id) {
+          setActiveBlueprintId(data.blueprint.id)
+        }
+      }
+    } catch {}
+  }
+
+  const handleCreateNewBlueprint = async () => {
+    const selectedNames = repositories
+      .filter(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
+      .map(r => r.fullName)
+    await handleSaveBlueprint({
+      name: `Proyecto IA #${blueprints.length + 1}`,
+      description: 'Stack curado desde tu Galería de Repositorios y Guardados de Atlas.',
+      goal: 'Construir e integrar herramientas open-source, Skills y servidores MCP en mi flujo de desarrollo.',
+      repoFullNames: selectedNames,
+      bookmarkIds: [],
+      notes: ''
+    })
+    setGeneratedMasterPrompt('')
+    setActiveSubTab('blueprints')
+  }
+
+  const handleAddReposToActiveBlueprint = async (repoFullNamesToAdd: string[]) => {
+    if (repoFullNamesToAdd.length === 0) return
+    const targetBp = activeBlueprint || {
+      name: 'Stack Principal IA & MCP',
+      description: 'Proyecto creado automáticamente desde tu selección de repositorios.',
+      goal: 'Integrar estos repositorios y herramientas en mi entorno de desarrollo.',
+      repoFullNames: [],
+      bookmarkIds: [],
+      notes: ''
+    }
+    const mergedNames = Array.from(new Set([...(targetBp.repoFullNames || []), ...repoFullNamesToAdd]))
+    await handleSaveBlueprint({
+      ...targetBp,
+      repoFullNames: mergedNames
+    })
+    setStatusBanner({
+      type: 'ok',
+      text: `${repoFullNamesToAdd.length} repositorio(s) añadido(s) al proyecto "${targetBp.name}". Podés generar su PROMPT_MAESTRO.md en la pestaña Armador de Proyectos.`
+    })
+  }
+
+  const handleDeleteBlueprint = async (id: string) => {
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete-blueprint', id })
+      })
+      const data = await res.json()
+      if (res.ok && Array.isArray(data.blueprints)) {
+        setBlueprints(data.blueprints)
+        setActiveBlueprintId(data.blueprints[0]?.id || '')
+      }
+    } catch {}
+  }
+
+  const handleGenerateMasterPrompt = async (bp?: ProjectBlueprint) => {
+    const target = bp || activeBlueprint
+    if (!target) return
+    setIsGeneratingPrompt(true)
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate-master-prompt',
+          blueprint: target
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.markdown) {
+        setGeneratedMasterPrompt(data.markdown)
+      }
+    } catch {} finally {
+      setIsGeneratingPrompt(false)
+    }
+  }
+
+  const handleDownloadMasterPrompt = (filename = 'PROMPT_MAESTRO.md') => {
+    if (!generatedMasterPrompt) return
+    const blob = new Blob([generatedMasterPrompt], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
   }
 
   // Refresh single repo inside detail modal
@@ -1119,6 +1510,15 @@ export function ReposView({
           <Button
             size="sm"
             variant="outline"
+            onClick={() => setIsStarsModalOpen(true)}
+            className="border-amber-600/40 bg-amber-950/20 text-amber-200 hover:bg-amber-950/40 text-xs gap-1.5"
+            title="Importar todos los repositorios con estrella (GitHub Stars) de cualquier usuario"
+          >
+            <Star className="size-3.5 fill-amber-400 text-amber-400" /> Importar Stars
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => setIsBulkTextModalOpen(true)}
             className="border-border bg-[#1b1d27] text-xs gap-1.5"
           >
@@ -1134,19 +1534,30 @@ export function ReposView({
                   ? Array.from(selectedRepoKeys)
                   : filteredRepositories
                       .filter(r => (r.stars || 0) === 0)
-                      .slice(0, 8)
+                      .slice(0, 20)
                       .map(r => r.fullName)
               if (targetNames.length === 0 && filteredRepositories.length > 0) {
-                handleEnrichReposWithGitHubApi(filteredRepositories.slice(0, 6).map(r => r.fullName))
+                handleEnrichReposWithGitHubApi(filteredRepositories.slice(0, 12).map(r => r.fullName))
               } else {
                 handleEnrichReposWithGitHubApi(targetNames)
               }
             }}
             className="border-border bg-[#1b1d27] text-xs gap-1.5"
-            title="Consulta la API de GitHub para traer estrellas, forks, lenguajes e imagen del README"
+            title="Consulta la API de GitHub en lotes con barra de progreso pausable"
           >
             <RefreshCw className={`size-3.5 text-emerald-400 ${isBatchEnriching ? 'animate-spin' : ''}`} />
-            {isBatchEnriching ? 'Enriqueciendo...' : 'Enriquecer con GitHub API'}
+            {isBatchEnriching ? 'Enriqueciendo...' : 'Enriquecer Lote (GitHub API)'}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isExpandingShortLinks}
+            onClick={handleExpandShortLinks}
+            className="border-border bg-[#1b1d27] text-xs gap-1.5"
+            title="Expande enlaces t.co y bit.ly en tus guardados para descubrir repositorios ocultos"
+          >
+            <Link2 className={`size-3.5 text-cyan-400 ${isExpandingShortLinks ? 'animate-pulse' : ''}`} />
+            {isExpandingShortLinks ? 'Desacortando...' : 'Desacortar t.co'}
           </Button>
           <Button
             size="sm"
@@ -1179,6 +1590,42 @@ export function ReposView({
           </Button>
         </div>
       </div>
+
+      {/* Barra de Progreso en Vivo para Enriquecimiento Masivo (Pausable) */}
+      {isBatchEnriching && batchEnrichProgress && (
+        <div className="rounded-xl border border-emerald-500/40 bg-emerald-950/25 p-4 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-emerald-200 font-medium">
+              <Loader2 className="size-4 animate-spin text-emerald-400" />
+              <span>
+                Enriqueciendo desde GitHub API: <strong>{batchEnrichProgress.processed}</strong> de{' '}
+                <strong>{batchEnrichProgress.total}</strong> repositorios ({batchEnrichProgress.currentBatchLabel})
+              </span>
+            </div>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => {
+                stopBatchEnrichRef.current = true
+              }}
+              className="border-amber-500/50 bg-amber-950/40 text-amber-200 hover:bg-amber-950/70 gap-1"
+            >
+              <Pause className="size-3" /> Pausar / Detener
+            </Button>
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-black/50">
+            <div
+              className="h-full bg-emerald-400 transition-all duration-300"
+              style={{
+                width: `${Math.min(
+                  100,
+                  Math.round((batchEnrichProgress.processed / Math.max(1, batchEnrichProgress.total)) * 100)
+                )}%`
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Banner informativo */}
       {statusBanner && (
@@ -1224,9 +1671,9 @@ export function ReposView({
         </div>
       </div>
 
-      {/* Sub-pestañas: Mi Galería vs Descubrir en GitHub */}
+      {/* Sub-pestañas: Mi Galería vs Descubrir en GitHub vs Armador de Proyectos */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setActiveSubTab('gallery')}
             className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium transition-all ${
@@ -1249,10 +1696,32 @@ export function ReposView({
             <Compass className="size-4" />
             <span>Descubrir en GitHub (Live)</span>
           </button>
+          <button
+            onClick={() => setActiveSubTab('blueprints')}
+            className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium transition-all ${
+              activeSubTab === 'blueprints'
+                ? 'bg-[#7c6cf0] text-white shadow-sm'
+                : 'bg-[#161821] text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Layers className="size-4" />
+            <span>Armador de Proyectos & Prompts ({blueprints.length})</span>
+          </button>
         </div>
 
         {activeSubTab === 'gallery' && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={handleOpenCompareModal}
+              className="border-cyan-700/50 bg-cyan-950/30 text-xs text-cyan-200 hover:bg-cyan-950/50 gap-1.5"
+              title="Comparar repositorios lado a lado (estrellas, actividad, licencia y veredicto IA)"
+            >
+              <Columns className="size-3.5 text-cyan-400" />
+              Comparar ({selectedRepoKeys.size >= 2 ? selectedRepoKeys.size : 'Top 3'})
+            </Button>
+
             <Button
               size="xs"
               variant="outline"
@@ -1633,8 +2102,33 @@ export function ReposView({
                         </div>
                       )}
 
+                      {/* Comando de Instalación 1-Clic (Setup Rápido) */}
+                      {(() => {
+                        const snippet = getRepoInstallSnippets(repo)
+                        const cmdKey = `card:${repo.fullName}`
+                        return (
+                          <div
+                            onClick={e => handleCopyCmd(snippet.primaryCommand, cmdKey, e)}
+                            className="mt-3 flex items-center justify-between gap-2 rounded-lg border border-border/80 bg-[#0d0f15] px-2.5 py-1.5 font-mono text-[10px] text-zinc-300 hover:border-[#7c6cf0]/60 transition-colors"
+                            title="Clic para copiar comando de instalación"
+                          >
+                            <span className="truncate flex items-center gap-1.5">
+                              <Terminal className="size-3 text-[#9b91f5] shrink-0" />
+                              <span className="truncate">{snippet.primaryCommand}</span>
+                            </span>
+                            <span className="shrink-0 text-[10px] text-muted-foreground">
+                              {copiedCmdKey === cmdKey ? (
+                                <Check className="size-3 text-emerald-400" />
+                              ) : (
+                                <Copy className="size-3 hover:text-white" />
+                              )}
+                            </span>
+                          </div>
+                        )
+                      })()}
+
                       {/* Footer con Estrellas, Forks y Estado de Actividad */}
-                      <div className="mt-auto pt-3.5">
+                      <div className="mt-auto pt-3">
                         <div className="flex items-center justify-between border-t border-border/60 pt-2.5 text-[11px] text-muted-foreground">
                           <div className="flex items-center gap-3">
                             <span className="flex items-center gap-1 font-medium text-foreground">
@@ -1994,6 +2488,337 @@ export function ReposView({
       )}
 
       {/* ===================================================================== */}
+      {/* SUB-VISTA 3: ARMADOR DE PROYECTOS & GENERADOR DE PROMPT MAESTRO       */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'blueprints' && (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+          {/* Columna Izquierda: Lista de Proyectos / Stacks */}
+          <div className="space-y-3 lg:col-span-4">
+            <div className="flex items-center justify-between rounded-xl border border-border bg-[#15171f] p-4">
+              <div>
+                <h3 className="text-sm font-semibold text-foreground">Mis Proyectos & Stacks</h3>
+                <p className="text-[11px] text-muted-foreground">
+                  Agrupá repositorios para generar Prompts Maestros
+                </p>
+              </div>
+              <Button
+                size="xs"
+                onClick={handleCreateNewBlueprint}
+                className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] gap-1"
+              >
+                <Plus className="size-3.5" /> Nuevo Proyecto
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              {blueprints.map(bp => {
+                const isActive = activeBlueprint?.id === bp.id
+                return (
+                  <div
+                    key={bp.id}
+                    onClick={() => {
+                      setActiveBlueprintId(bp.id)
+                      setGeneratedMasterPrompt('')
+                    }}
+                    className={`cursor-pointer rounded-xl border p-3.5 transition-all ${
+                      isActive
+                        ? 'border-[#7c6cf0] bg-[#1e1b33] shadow-md'
+                        : 'border-border bg-[#15171f] hover:border-[#4b4675]'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h4 className="truncate text-xs font-semibold text-foreground">{bp.name}</h4>
+                        <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+                          {bp.goal || bp.description || 'Sin objetivo definido'}
+                        </p>
+                      </div>
+                      <Badge className="bg-[#28263b] text-[#cfcaff] text-[10px] shrink-0">
+                        {(bp.repoFullNames || []).length} repos
+                      </Badge>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Columna Derecha: Editor del Blueprint Activo + Generador de PROMPT_MAESTRO.md */}
+          <div className="space-y-5 lg:col-span-8">
+            {activeBlueprint ? (
+              <div className="rounded-xl border border-border bg-[#15171f] p-5 space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-4">
+                  <div className="space-y-1 flex-1 min-w-[240px]">
+                    <label className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                      Nombre del Proyecto / Stack
+                    </label>
+                    <input
+                      type="text"
+                      value={activeBlueprint.name}
+                      onChange={e => {
+                        const val = e.target.value
+                        setBlueprints(prev =>
+                          prev.map(b => (b.id === activeBlueprint.id ? { ...b, name: val } : b))
+                        )
+                      }}
+                      onBlur={e =>
+                        handleSaveBlueprint({ ...activeBlueprint, name: e.target.value || 'Proyecto IA' })
+                      }
+                      className="w-full rounded-lg border border-border bg-[#101218] px-3 py-1.5 font-serif text-base font-medium text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      disabled={isGeneratingPrompt}
+                      onClick={() => handleGenerateMasterPrompt(activeBlueprint)}
+                      className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] text-xs gap-1.5"
+                    >
+                      {isGeneratingPrompt ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="size-3.5" />
+                      )}
+                      Generar PROMPT_MAESTRO.md / CLAUDE.md
+                    </Button>
+                    {blueprints.length > 1 && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleDeleteBlueprint(activeBlueprint.id)}
+                        className="text-red-400 hover:bg-red-950/30 text-xs"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Objetivo y Notas */}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-300">
+                      Objetivo Técnico (¿Qué querés construir con estos repositorios?)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={activeBlueprint.goal}
+                      onChange={e => {
+                        const val = e.target.value
+                        setBlueprints(prev =>
+                          prev.map(b => (b.id === activeBlueprint.id ? { ...b, goal: val } : b))
+                        )
+                      }}
+                      onBlur={e => handleSaveBlueprint({ ...activeBlueprint, goal: e.target.value })}
+                      placeholder="Ej: Construir un agente que edite videos con FFmpeg y tenga acceso a estos servidores MCP..."
+                      className="w-full rounded-lg border border-border bg-[#101218] p-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-zinc-300">
+                      Notas de Arquitectura / Reglas para el Agente
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={activeBlueprint.notes}
+                      onChange={e => {
+                        const val = e.target.value
+                        setBlueprints(prev =>
+                          prev.map(b => (b.id === activeBlueprint.id ? { ...b, notes: val } : b))
+                        )
+                      }}
+                      onBlur={e => handleSaveBlueprint({ ...activeBlueprint, notes: e.target.value })}
+                      placeholder="Ej: Usar TypeScript estricto, integrar como subagentes modulares, priorizar ejecución local..."
+                      className="w-full rounded-lg border border-border bg-[#101218] p-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {/* Repositorios asignados al Proyecto */}
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Repositorios en este Proyecto ({(activeBlueprint.repoFullNames || []).length})
+                    </h4>
+
+                    {/* Buscador rápido para añadir repositorios de la galería */}
+                    <div className="relative w-64">
+                      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                      <input
+                        type="text"
+                        value={blueprintRepoSearch}
+                        onChange={e => setBlueprintRepoSearch(e.target.value)}
+                        placeholder="Añadir repo de tu galería..."
+                        className="w-full rounded-lg border border-border bg-[#101218] py-1.5 pl-8 pr-3 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {blueprintRepoSearch.trim() && (
+                    <div className="max-h-40 overflow-y-auto rounded-lg border border-[#4a4475] bg-[#101218] p-2 space-y-1">
+                      {repositories
+                        .filter(
+                          r =>
+                            !(activeBlueprint.repoFullNames || []).some(
+                              n => n.toLowerCase() === r.fullName.toLowerCase()
+                            ) &&
+                            `${r.fullName} ${r.shortExplanationEs || ''} ${r.resourceType || ''}`
+                              .toLowerCase()
+                              .includes(blueprintRepoSearch.toLowerCase())
+                        )
+                        .slice(0, 8)
+                        .map(r => (
+                          <div
+                            key={r.fullName}
+                            onClick={() => {
+                              handleSaveBlueprint({
+                                ...activeBlueprint,
+                                repoFullNames: [...(activeBlueprint.repoFullNames || []), r.fullName]
+                              })
+                              setBlueprintRepoSearch('')
+                            }}
+                            className="flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs cursor-pointer hover:bg-[#232038]"
+                          >
+                            <div className="min-w-0 truncate">
+                              <span className="font-semibold text-white">{r.fullName}</span>
+                              <span className="ml-2 text-muted-foreground">
+                                — {r.shortExplanationEs || r.description}
+                              </span>
+                            </div>
+                            <Badge className="bg-[#7c6cf0] text-white text-[10px] shrink-0">+ Añadir</Badge>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                    {(activeBlueprint.repoFullNames || []).map(fullName => {
+                      const repo = repositories.find(
+                        r => r.fullName.toLowerCase() === fullName.toLowerCase()
+                      )
+                      const snippet = repo ? getRepoInstallSnippets(repo) : null
+                      return (
+                        <div
+                          key={fullName}
+                          className="flex flex-col justify-between rounded-xl border border-border bg-[#101218] p-3 space-y-2"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  onClick={() => repo && setDetailRepo(repo)}
+                                  className="cursor-pointer truncate text-xs font-semibold text-[#cfcaff] hover:underline"
+                                >
+                                  {fullName}
+                                </span>
+                                {repo?.resourceType && (
+                                  <span
+                                    className={`rounded border px-1.5 py-0.2 text-[9px] ${getResourceTypeStyle(
+                                      repo.resourceType
+                                    )}`}
+                                  >
+                                    {repo.resourceType}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+                                {repo?.shortExplanationEs || repo?.description || 'Repositorio de GitHub'}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => {
+                                handleSaveBlueprint({
+                                  ...activeBlueprint,
+                                  repoFullNames: (activeBlueprint.repoFullNames || []).filter(
+                                    n => n.toLowerCase() !== fullName.toLowerCase()
+                                  )
+                                })
+                              }}
+                              className="text-muted-foreground hover:text-red-400"
+                              title="Quitar del proyecto"
+                            >
+                              <X className="size-3.5" />
+                            </button>
+                          </div>
+
+                          {snippet && (
+                            <div
+                              onClick={e => handleCopyCmd(snippet.primaryCommand, `bp:${fullName}`, e)}
+                              className="flex items-center justify-between gap-2 rounded border border-border/60 bg-[#0b0d12] px-2 py-1 font-mono text-[10px] text-zinc-300 cursor-pointer hover:border-[#7c6cf0]"
+                            >
+                              <span className="truncate">$ {snippet.primaryCommand}</span>
+                              {copiedCmdKey === `bp:${fullName}` ? (
+                                <Check className="size-3 text-emerald-400 shrink-0" />
+                              ) : (
+                                <Copy className="size-3 text-muted-foreground shrink-0" />
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Vista previa del PROMPT_MAESTRO.md generado */}
+                {generatedMasterPrompt && (
+                  <div className="space-y-3 rounded-xl border border-[#4c4578] bg-[#101218] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="size-4 text-[#a59cf5]" />
+                        <span className="text-xs font-semibold text-white">
+                          Documento Generado: listo para Claude Code, Cursor, Antigravity o Codex
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(generatedMasterPrompt)
+                            setCopiedMasterPrompt(true)
+                            setTimeout(() => setCopiedMasterPrompt(false), 2200)
+                          }}
+                          className="border-[#524b82] bg-[#242038] text-xs text-white gap-1"
+                        >
+                          {copiedMasterPrompt ? (
+                            <Check className="size-3 text-emerald-400" />
+                          ) : (
+                            <Copy className="size-3" />
+                          )}
+                          {copiedMasterPrompt ? '¡Copiado!' : 'Copiar Markdown'}
+                        </Button>
+                        <Button
+                          size="xs"
+                          onClick={() => handleDownloadMasterPrompt('PROMPT_MAESTRO.md')}
+                          className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] text-xs gap-1"
+                        >
+                          <Download className="size-3" /> Descargar PROMPT_MAESTRO.md
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          onClick={() => handleDownloadMasterPrompt('CLAUDE.md')}
+                          className="border-border bg-[#191b26] text-xs gap-1"
+                        >
+                          <Download className="size-3" /> CLAUDE.md
+                        </Button>
+                      </div>
+                    </div>
+
+                    <pre className="max-h-96 overflow-y-auto rounded-lg border border-border bg-[#0b0c10] p-4 font-mono text-[11px] leading-relaxed text-zinc-200 whitespace-pre-wrap">
+                      {generatedMasterPrompt}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
       {/* BARRA FLOTANTE DE SELECCIÓN MÚLTIPLE                                 */}
       {/* ===================================================================== */}
       {selectedRepoKeys.size > 0 && (
@@ -2011,6 +2836,33 @@ export function ReposView({
             className="text-xs text-zinc-300"
           >
             Seleccionar visibles ({filteredRepositories.length})
+          </Button>
+
+          {selectedRepoKeys.size >= 2 && (
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={handleOpenCompareModal}
+              className="border-cyan-600/50 bg-cyan-950/40 text-cyan-200 text-xs gap-1"
+            >
+              <Columns className="size-3 text-cyan-400" />
+              Comparar ({Math.min(4, selectedRepoKeys.size)})
+            </Button>
+          )}
+
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => {
+              const names = repositories
+                .filter(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
+                .map(r => r.fullName)
+              handleAddReposToActiveBlueprint(names)
+            }}
+            className="border-[#6b5de0]/60 bg-[#272342] text-[#dfdcfb] text-xs gap-1"
+          >
+            <Layers className="size-3 text-[#a59cf5]" />
+            + Añadir a Proyecto / Prompt
           </Button>
 
           <Button
@@ -2130,6 +2982,15 @@ export function ReposView({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => handleAddReposToActiveBlueprint([detailRepo.fullName])}
+                    className="border-[#6b5de0]/60 bg-black/60 text-xs text-[#dfdcfb] hover:bg-black/80 gap-1.5"
+                  >
+                    <Layers className="size-3.5 text-[#a59cf5]" />
+                    + Añadir a Proyecto
+                  </Button>
                   <Button
                     size="xs"
                     variant="outline"
@@ -2280,6 +3141,83 @@ export function ReposView({
                   </div>
                 )}
               </div>
+
+              {/* Instalación Rápida (1-Clic) & Configuración MCP / Agente */}
+              {(() => {
+                const snippet = getRepoInstallSnippets(detailRepo)
+                return (
+                  <div className="rounded-xl border border-border bg-[#191b26] p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                        <Terminal className="size-3.5 text-emerald-400" />
+                        Instalación Rápida (1-Clic) & Snippets de Agente
+                      </h3>
+                      <Badge variant="outline" className="text-[10px] border-emerald-700/40 text-emerald-300">
+                        {snippet.category.toUpperCase()}
+                      </Badge>
+                    </div>
+
+                    <div className="space-y-2">
+                      {snippet.commands.map((cmd, idx) => {
+                        const cmdKey = `modal-cmd-${idx}`
+                        return (
+                          <div
+                            key={idx}
+                            onClick={e => handleCopyCmd(cmd, cmdKey, e)}
+                            className="flex items-center justify-between gap-2 rounded-lg border border-border bg-[#0d0f15] px-3 py-2 font-mono text-xs text-zinc-200 cursor-pointer hover:border-[#7c6cf0]"
+                          >
+                            <span className="truncate">$ {cmd}</span>
+                            <Button
+                              size="xs"
+                              variant="ghost"
+                              className="h-6 px-2 text-[11px] text-[#cfcaff]"
+                            >
+                              {copiedCmdKey === cmdKey ? (
+                                <>
+                                  <Check className="size-3 text-emerald-400 mr-1" /> Copiado
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="size-3 mr-1" /> Copiar
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    {snippet.mcpConfigJson && (
+                      <div className="space-y-1.5 pt-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-medium text-cyan-300">
+                            Configuración JSON para MCP (Claude Desktop / Cursor / Antigravity):
+                          </span>
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            onClick={e => handleCopyCmd(snippet.mcpConfigJson!, 'modal-mcp-json', e)}
+                            className="h-6 border-cyan-700/50 bg-cyan-950/30 text-[10px] text-cyan-200 gap-1"
+                          >
+                            {copiedCmdKey === 'modal-mcp-json' ? (
+                              <>
+                                <Check className="size-3 text-emerald-400" /> JSON Copiado
+                              </>
+                            ) : (
+                              <>
+                                <Copy className="size-3" /> Copiar mcpServers JSON
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                        <pre className="overflow-x-auto rounded-lg border border-border bg-[#0b0d13] p-3 font-mono text-[11px] text-cyan-200">
+                          {snippet.mcpConfigJson}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* Publicaciones Guardadas Vinculadas (Conexión directa con tu Biblioteca X / IG / WA) */}
               {(() => {
@@ -2724,6 +3662,339 @@ export function ReposView({
               >
                 Guardar preferencias
               </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: IMPORTAR GITHUB STARS DE CUALQUIER USUARIO                     */}
+      {/* ===================================================================== */}
+      {isStarsModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          onClick={() => !isImportingStars && setIsStarsModalOpen(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="w-full max-w-lg rounded-2xl border border-border bg-[#15171f] p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Star className="size-4 fill-amber-400 text-amber-400" />
+                <h3 className="font-serif text-lg font-medium text-foreground">
+                  Sincronizar e Importar GitHub Stars
+                </h3>
+              </div>
+              <button
+                onClick={() => !isImportingStars && setIsStarsModalOpen(false)}
+                className="text-muted-foreground hover:text-white"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Ingresá tu usuario de GitHub (o el de cualquier desarrollador referente) para importar automáticamente sus repositorios marcados con estrella (★) a tu Galería y Biblioteca de Atlas.
+            </p>
+
+            <form onSubmit={handleImportGitHubStars} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-300">Usuario de GitHub</label>
+                <input
+                  type="text"
+                  required
+                  value={starsUsernameInput}
+                  onChange={e => setStarsUsernameInput(e.target.value)}
+                  placeholder="Ej: nicospum, karpathy, shadcn..."
+                  className="w-full rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-300">Cantidad de Stars recientes a traer</label>
+                <select
+                  value={starsCountInput}
+                  onChange={e => setStarsCountInput(Number(e.target.value))}
+                  className="w-full rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground"
+                >
+                  <option value={30}>Últimos 30 repositorios con estrella</option>
+                  <option value={50}>Últimos 50 repositorios con estrella</option>
+                  <option value={100}>Últimos 100 repositorios con estrella</option>
+                </select>
+              </div>
+
+              {starsError && (
+                <p className="rounded-lg border border-red-500/40 bg-red-950/30 p-2.5 text-xs text-red-200">
+                  {starsError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={isImportingStars}
+                  onClick={() => setIsStarsModalOpen(false)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={isImportingStars || !starsUsernameInput.trim()}
+                  className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] gap-1.5"
+                >
+                  {isImportingStars && <Loader2 className="size-3.5 animate-spin" />}
+                  {isImportingStars ? 'Importando Stars de GitHub...' : 'Importar a Atlas'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: COMPARADOR LADO A LADO («VERSUS» DE REPOSITORIOS)              */}
+      {/* ===================================================================== */}
+      {isCompareModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm overflow-y-auto"
+          onClick={() => setIsCompareModalOpen(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="my-8 flex max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border bg-[#14161f] shadow-2xl"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border bg-[#191b27] px-6 py-4">
+              <div className="flex items-center gap-2.5">
+                <Columns className="size-5 text-cyan-400" />
+                <div>
+                  <h3 className="font-serif text-lg font-medium text-white">
+                    Comparador Lado a Lado ({comparedRepos.length} repositorios)
+                  </h3>
+                  <p className="text-xs text-muted-foreground">
+                    Compará tracción, actividad, licencia comercial, comandos de instalación y veredicto en español
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={isComparingAi}
+                  onClick={() => handleRunCompareAi(comparedRepos)}
+                  className="border-[#524b82] bg-[#242038] text-xs text-white gap-1"
+                >
+                  <Sparkles className={`size-3.5 ${isComparingAi ? 'animate-spin' : ''}`} />
+                  Regenerar Veredicto IA
+                </Button>
+                <button
+                  onClick={() => setIsCompareModalOpen(false)}
+                  className="rounded-full p-1.5 text-muted-foreground hover:bg-black/40 hover:text-white"
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Matriz Comparativa */}
+              <div className="overflow-x-auto rounded-xl border border-border bg-[#101218]">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-[#171923]">
+                      <th className="p-3.5 w-44 text-[11px] uppercase tracking-wider text-muted-foreground">
+                        Criterio
+                      </th>
+                      {comparedRepos.map(r => (
+                        <th key={r.fullName} className="p-3.5 min-w-[230px]">
+                          <div className="flex items-center gap-2">
+                            <img
+                              src={r.avatarUrl || `https://github.com/${r.owner}.png?size=64`}
+                              alt={r.owner}
+                              className="size-6 rounded-full"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-[10px] text-muted-foreground font-normal">{r.owner} /</p>
+                              <a
+                                href={r.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-semibold text-sm text-[#cfcaff] hover:underline flex items-center gap-1"
+                              >
+                                {r.name} <ExternalLink className="size-3" />
+                              </a>
+                            </div>
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/60">
+                    <tr>
+                      <td className="p-3 font-medium text-muted-foreground">Tipo de Recurso</td>
+                      {comparedRepos.map(r => (
+                        <td key={r.fullName} className="p-3">
+                          <span
+                            className={`rounded-md border px-2 py-0.5 text-[10px] font-medium ${getResourceTypeStyle(
+                              r.resourceType
+                            )}`}
+                          >
+                            {r.resourceType || 'Repositorio'}
+                          </span>
+                        </td>
+                      ))}
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-medium text-muted-foreground">Para qué sirve</td>
+                      {comparedRepos.map(r => (
+                        <td key={r.fullName} className="p-3 text-zinc-200 leading-relaxed">
+                          {r.shortExplanationEs || r.description}
+                        </td>
+                      ))}
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-medium text-muted-foreground">Estrellas / Forks</td>
+                      {comparedRepos.map(r => (
+                        <td key={r.fullName} className="p-3">
+                          <div className="flex items-center gap-3">
+                            <span className="font-semibold text-amber-300 flex items-center gap-1">
+                              <Star className="size-3.5 fill-amber-400 text-amber-400" />
+                              {r.stars > 0 ? r.stars.toLocaleString() : 'Pendiente API'}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {r.forks > 0 ? `${r.forks.toLocaleString()} forks` : ''}
+                            </span>
+                          </div>
+                        </td>
+                      ))}
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-medium text-muted-foreground">Actividad y Salud</td>
+                      {comparedRepos.map(r => {
+                        const act = getActivityBadge(r.pushedAt || r.updatedAt)
+                        return (
+                          <td key={r.fullName} className="p-3">
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[10px] ${act.cls}`}
+                            >
+                              <span className={`size-1.5 rounded-full ${act.dot}`} />
+                              {act.label} ({formatShortDate(r.pushedAt || r.updatedAt)})
+                            </span>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-medium text-muted-foreground">Licencia & Uso Comercial</td>
+                      {comparedRepos.map(r => {
+                        const lic = getLicenseAssessment(r.license)
+                        return (
+                          <td key={r.fullName} className="p-3">
+                            <span className={`inline-block rounded-md border px-2 py-0.5 text-[10px] ${lic.cls}`}>
+                              {lic.label}
+                            </span>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-medium text-muted-foreground">Lenguaje Principal</td>
+                      {comparedRepos.map(r => (
+                        <td key={r.fullName} className="p-3">
+                          {r.primaryLanguage ? (
+                            <span className="inline-flex items-center gap-1.5">
+                              <span
+                                className="size-2 rounded-full"
+                                style={{ backgroundColor: getLanguageColor(r.primaryLanguage) }}
+                              />
+                              {r.primaryLanguage}
+                            </span>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-medium text-muted-foreground">Instalación 1-Clic</td>
+                      {comparedRepos.map(r => {
+                        const snip = getRepoInstallSnippets(r)
+                        const k = `cmp:${r.fullName}`
+                        return (
+                          <td key={r.fullName} className="p-3">
+                            <div
+                              onClick={e => handleCopyCmd(snip.primaryCommand, k, e)}
+                              className="flex items-center justify-between gap-2 rounded border border-border bg-[#0b0d13] px-2 py-1 font-mono text-[10px] text-zinc-200 cursor-pointer hover:border-[#7c6cf0]"
+                            >
+                              <span className="truncate">$ {snip.primaryCommand}</span>
+                              {copiedCmdKey === k ? (
+                                <Check className="size-3 text-emerald-400 shrink-0" />
+                              ) : (
+                                <Copy className="size-3 text-muted-foreground shrink-0" />
+                              )}
+                            </div>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-medium text-muted-foreground">Guardados Vinculados</td>
+                      {comparedRepos.map(r => {
+                        const posts = getLinkedBookmarksForRepo(r)
+                        return (
+                          <td key={r.fullName} className="p-3">
+                            <Badge variant="outline" className="text-[10px]">
+                              {posts.length} guardado{posts.length === 1 ? '' : 's'} en Biblioteca
+                            </Badge>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Veredicto Comparativo en Español */}
+              <div className="rounded-xl border border-[#453e70] bg-[#1a182b] p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="size-4 text-[#a59cf5]" />
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-white">
+                      Veredicto Comparativo y Recomendación de Elección
+                    </h4>
+                  </div>
+                  {compareVerdict && (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(compareVerdict)
+                        setCopiedComparison(true)
+                        setTimeout(() => setCopiedComparison(false), 2000)
+                      }}
+                      className="text-xs text-[#cfcaff] gap-1"
+                    >
+                      {copiedComparison ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
+                      {copiedComparison ? 'Copiado' : 'Copiar veredicto'}
+                    </Button>
+                  )}
+                </div>
+
+                {isComparingAi ? (
+                  <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
+                    <Loader2 className="size-4 animate-spin text-[#a59cf5]" />
+                    Generando análisis comparativo en español...
+                  </div>
+                ) : (
+                  <div className="text-xs leading-relaxed text-zinc-200 whitespace-pre-line">
+                    {compareVerdict || 'Seleccioná 2 o más repositorios para comparar sus fortalezas.'}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

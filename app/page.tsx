@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sidebar } from '@/components/sidebar'
 import { DetailSheet } from '@/components/detail-sheet'
+import { CommandPalette } from '@/components/command-palette'
 import { OverviewView } from '@/components/views/overview-view'
 import { LibraryView } from '@/components/views/library-view'
 import { ReposView } from '@/components/views/repos-view'
@@ -27,6 +28,7 @@ export default function AtlasApp() {
   const [apiError, setApiError] = useState<string | null>(null)
   const [selectedDetailItem, setSelectedDetailItem] = useState<BookmarkItem | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [selectedTopicFilter, setSelectedTopicFilter] = useState<string | null>(null)
@@ -349,11 +351,15 @@ export default function AtlasApp() {
               </Button>
 
               <button
-                onClick={() => setActive('Biblioteca')}
-                className="hidden items-center gap-1.5 rounded-md border border-border bg-[#16181f] px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground sm:flex"
+                onClick={() => setCommandPaletteOpen(true)}
+                className="flex items-center gap-2 rounded-md border border-border bg-[#16181f] px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-[#7c6cf0]/50 hover:text-foreground"
+                title="Abrir Paleta de Comandos y Búsqueda Global (Ctrl+K)"
               >
-                <Search className="size-3.5" />
-                <span>Buscar en archivo...</span>
+                <Search className="size-3.5 text-[#a59cf5]" />
+                <span>Buscar en archivo o repos...</span>
+                <kbd className="rounded border border-border bg-[#101218] px-1.5 py-0.2 text-[10px] text-muted-foreground">
+                  Ctrl+K
+                </kbd>
               </button>
 
               <Badge
@@ -495,6 +501,16 @@ export default function AtlasApp() {
         onAnalyze={handleAnalyzeBookmark}
         onRefresh={refreshBookmarks}
         onOpenRepoInGallery={handleOpenRepoInGallery}
+      />
+
+      {/* Paleta de Comandos y Búsqueda Global (Ctrl+K / Cmd+K) */}
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        bookmarks={bookmarks}
+        onNavigateView={setActive}
+        onSelectBookmark={handleOpenDetail}
+        onSelectRepo={handleOpenRepoInGallery}
       />
     </div>
   )

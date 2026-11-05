@@ -15,7 +15,10 @@ import {
   upsertGalleryRepository,
   deleteGalleryRepository,
   saveGalleryCustomOrder,
-  syncBookmarksToGitHubGallery
+  syncBookmarksToGitHubGallery,
+  getAllProjectBlueprints,
+  upsertProjectBlueprint,
+  deleteProjectBlueprint
 } from './db'
 import {
   AnalysisState,
@@ -25,6 +28,7 @@ import {
   ImportResult,
   ImportStageMetrics,
   LinkedResource,
+  ProjectBlueprint,
   ResourceType,
   SourcePlatform
 } from './types'
@@ -32,7 +36,10 @@ import { analyzeContent, semanticSearchBookmarks } from './ai-analyzer'
 import {
   investigateResourceUrlLive,
   synthesizeBookmarkFields,
-  buildLinkedResourcesFromUrls
+  buildLinkedResourcesFromUrls,
+  isShortenerUrl,
+  resolveShortenedUrl,
+  classifyGitHubUrl
 } from './resource-investigator'
 import { galleryRepoToBookmarkItem } from './github-gallery'
 
@@ -837,11 +844,102 @@ export function saveGalleryRepoWithBookmark(
   return savedRepo
 }
 
+/**
+ * Scans saved bookmarks for shortened links (t.co, bit.ly, tinyurl.com, etc.),
+ * expands them via HTTP redirect / t.co HTML refresh, updates outgoingLinks & resources,
+ * and synchronizes newly discovered GitHub repositories into the Gallery.
+ */
+export async function expandShortenedUrlsBatch(limit = 30): Promise<{
+  checkedBookmarks: number
+  expandedUrls: number
+  newGitHubRepos: number
+  expandedExamples: Array<{ from: string; to: string }>
+}> {
+  const all = getAllBookmarks()
+  const beforeRepoCount = getAllGalleryRepositories().length
+  let checkedBookmarks = 0
+  let expandedUrls = 0
+  const expandedExamples: Array<{ from: string; to: string }> = []
+
+  const candidates = all.filter(bm => {
+    const inlineUrls = (bm.caption || '').match(/https?:\/\/(?:t\.co|bit\.ly|tinyurl\.com|buff\.ly|ow\.ly)\/[A-Za-z0-9_-]+/gi) || []
+    const hasShortInLinks = (bm.outgoingLinks || []).some(u => isShortenerUrl(u))
+    return hasShortInLinks || inlineUrls.length > 0
+  })
+
+  for (const bm of candidates.slice(0, limit)) {
+    checkedBookmarks++
+    const inlineMatches =
+      (bm.caption || '').match(/https?:\/\/(?:t\.co|bit\.ly|tinyurl\.com|buff\.ly|ow\.ly)\/[A-Za-z0-9_-]+/gi) || []
+    const allShortUrls = Array.from(
+      new Set([...(bm.outgoingLinks || []).filter(u => isShortenerUrl(u)), ...inlineMatches])
+    )
+
+    if (allShortUrls.length === 0) continue
+
+    const resolvedLinks: string[] = []
+    for (const shortUrl of allShortUrls.slice(0, 6)) {
+      const resolved = await resolveShortenedUrl(shortUrl)
+      if (resolved && resolved !== shortUrl && !isShortenerUrl(resolved)) {
+        expandedUrls++
+        resolvedLinks.push(resolved)
+        if (expandedExamples.length < 10) {
+          expandedExamples.push({ from: shortUrl, to: resolved })
+        }
+      }
+    }
+
+    if (resolvedLinks.length > 0) {
+      const mergedLinks = Array.from(
+        new Set([
+          ...(bm.outgoingLinks || []).filter(u => !allShortUrls.includes(u)),
+          ...resolvedLinks
+        ])
+      )
+      const syn = synthesizeBookmarkFields({
+        caption: bm.caption,
+        authorName: bm.authorName,
+        authorHandle: bm.authorHandle,
+        platform: bm.platform,
+        outgoingLinks: mergedLinks,
+        topics: bm.topics,
+        entities: bm.entities,
+        existingResources: bm.resources
+      })
+      const manualFields = new Set(bm.manualFields || [])
+      updateBookmark(
+        bm.id,
+        {
+          outgoingLinks: mergedLinks,
+          resources: syn.resources,
+          ...(manualFields.has('title') ? {} : { title: syn.title }),
+          ...(manualFields.has('purpose') ? {} : { purpose: syn.purpose, aiSummary: syn.purpose }),
+          ...(manualFields.has('resourceType') ? {} : { resourceType: syn.resourceType }),
+          ...(manualFields.has('evaluation') ? {} : { evaluation: syn.evaluation })
+        },
+        false
+      )
+    }
+  }
+
+  syncBookmarksToGitHubGallery(true)
+  const afterRepoCount = getAllGalleryRepositories().length
+  return {
+    checkedBookmarks,
+    expandedUrls,
+    newGitHubRepos: Math.max(0, afterRepoCount - beforeRepoCount),
+    expandedExamples
+  }
+}
+
 export {
   getAllGalleryRepositories,
   getGalleryRepositoryByFullName,
   upsertGalleryRepository,
   deleteGalleryRepository,
   saveGalleryCustomOrder,
-  syncBookmarksToGitHubGallery
+  syncBookmarksToGitHubGallery,
+  getAllProjectBlueprints,
+  upsertProjectBlueprint,
+  deleteProjectBlueprint
 }
