@@ -46,8 +46,20 @@ const {
   insertBookmarksBatch,
   updateBookmark,
   updateBookmarksBatch,
-  reclassifyAllBookmarks
+  reclassifyAllBookmarks,
+  getAllGalleryRepositories,
+  getGalleryRepositoryByFullName,
+  saveGalleryRepoWithBookmark,
+  syncBookmarksToGitHubGallery
 } = require('../lib/bookmarks-repository.ts')
+const {
+  parseGitHubUrl,
+  extractGitHubUrlsFromText,
+  parseGalleryImportJson,
+  galleryRepoToBookmarkItem,
+  explainRepoWithAiServer,
+  askGalleryAssistantServer
+} = require('../lib/github-gallery.ts')
 const { db } = require('../lib/db.ts')
 const {
   buildWorkbook,
@@ -519,6 +531,76 @@ test('Table, CSV, XLSX and JSON Backup v2 round trip preserve literal text and 8
   })
   assert.equal(XLSX.utils.sheet_to_json(filtered.Sheets.Todos).length, 0)
   assert.throws(() => buildWorkbook([item], { sheets: ['invalid'], columns: ['Autor'] }))
+})
+
+test('GitHub Visual Gallery integration: bidirectional sync, bulk text extraction, JSON v2.0 import and AI Spanish explanations', async () => {
+  // 1. URL parsing & bulk text extraction
+  assert.deepEqual(parseGitHubUrl('https://github.com/anthropics/skills.git'), {
+    owner: 'anthropics',
+    repo: 'skills'
+  })
+  assert.equal(parseGitHubUrl('https://github.com/trending'), null)
+
+  const extracted = extractGitHubUrlsFromText(
+    'Te recomiendo mirar https://github.com/anthropics/skills y también github.com/modelcontextprotocol/servers).'
+  )
+  assert.equal(extracted.length, 2)
+  assert.equal(extracted[0].cleanUrl, 'https://github.com/anthropics/skills')
+  assert.equal(extracted[1].cleanUrl, 'https://github.com/modelcontextprotocol/servers')
+
+  // 2. Sync from saved bookmarks into github_repos table
+  const syncRes = syncBookmarksToGitHubGallery()
+  assert.ok(syncRes.totalRepos >= 2)
+
+  const galleryRepos = getAllGalleryRepositories()
+  const impeccableRepo = getGalleryRepositoryByFullName('pbakaus/impeccable')
+  assert.ok(impeccableRepo)
+  assert.equal(impeccableRepo.fullName, 'pbakaus/impeccable')
+  // Both x:3001 and x:3002 from earlier test must be linked to pbakaus/impeccable
+  assert.ok(impeccableRepo.linkedBookmarkIds.includes('x:3001'))
+  assert.ok(impeccableRepo.linkedBookmarkIds.includes('x:3002'))
+
+  // 3. Direct gallery repo save creates/updates a first-class BookmarkItem (platform === 'github')
+  const parsedGallery = parseGalleryImportJson(
+    JSON.stringify({
+      version: '2.0',
+      repositories: [
+        {
+          id: 90001,
+          owner: 'VoltAgent',
+          name: 'awesome-claude-code-subagents',
+          fullName: 'VoltAgent/awesome-claude-code-subagents',
+          url: 'https://github.com/VoltAgent/awesome-claude-code-subagents',
+          description: 'Curated subagents and skills for Claude Code.',
+          stars: 4200,
+          forks: 310,
+          primaryLanguage: 'TypeScript',
+          topics: ['claude-code', 'subagents', 'skills']
+        }
+      ]
+    })
+  )
+  assert.equal(parsedGallery.repositories.length, 1)
+  const savedGalleryRepo = saveGalleryRepoWithBookmark(parsedGallery.repositories[0])
+  assert.equal(savedGalleryRepo.fullName, 'VoltAgent/awesome-claude-code-subagents')
+  assert.ok(savedGalleryRepo.linkedBookmarkIds.includes('github:voltagent/awesome-claude-code-subagents'))
+
+  const linkedBm = getBookmarkById('github:voltagent/awesome-claude-code-subagents')
+  assert.ok(linkedBm)
+  assert.equal(linkedBm.platform, 'github')
+  assert.ok(linkedBm.evaluation.includes('4,200') || linkedBm.evaluation.includes('4.200'))
+
+  // 4. Deterministic Spanish AI fallback explanation & gallery assistant
+  const expl = await explainRepoWithAiServer(savedGalleryRepo, 'deterministic')
+  assert.ok(expl.shortExplanationEs.length > 10)
+  assert.ok(expl.longExplanationEs.includes('VoltAgent/awesome-claude-code-subagents'))
+
+  const chatReply = await askGalleryAssistantServer({
+    repos: getAllGalleryRepositories(),
+    question: '¿Qué repositorios tengo para subagentes o skills de Claude Code?',
+    provider: 'deterministic'
+  })
+  assert.ok(chatReply.includes('VoltAgent/awesome-claude-code-subagents') || chatReply.includes('pbakaus/impeccable'))
 })
 
 after(() => {

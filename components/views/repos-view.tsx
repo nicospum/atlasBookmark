@@ -1,0 +1,2850 @@
+'use client'
+
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import {
+  FolderGit2,
+  GitBranch as Github,
+  Star,
+  GitFork,
+  ExternalLink,
+  Search,
+  Sparkles,
+  Plus,
+  RefreshCw,
+  Download,
+  Upload,
+  Settings2,
+  Trash2,
+  Check,
+  Copy,
+  FileText,
+  X,
+  Compass,
+  LayoutGrid,
+  List,
+  MessageSquare,
+  Send,
+  Calendar,
+  Scale,
+  AlertCircle,
+  Bookmark,
+  ChevronLeft,
+  ChevronRight,
+  SlidersHorizontal,
+  Bot,
+  KeyRound,
+  CheckCircle2,
+  Loader2,
+  Globe
+} from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import type {
+  ActivityFilterType,
+  AiProviderId,
+  AiProviderInfo,
+  BookmarkItem,
+  CreatedAtFilterType,
+  DiscoverCategory,
+  GalleryRepository,
+  RateLimitInfo,
+  RepoSortByType,
+  ResourceType
+} from '@/lib/types'
+
+interface ReposViewProps {
+  bookmarks: BookmarkItem[]
+  onOpenBookmarkDetail: (item: BookmarkItem) => void
+  onRefreshBookmarks: () => Promise<void>
+  initialSelectedRepoFullName?: string | null
+  onClearInitialSelectedRepo?: () => void
+}
+
+const LANGUAGE_COLORS: Record<string, string> = {
+  JavaScript: '#f1e05a',
+  TypeScript: '#3178c6',
+  Python: '#3572A5',
+  Rust: '#dea584',
+  Go: '#00ADD8',
+  Java: '#b07219',
+  'C++': '#f34b7d',
+  C: '#555555',
+  'C#': '#178600',
+  PHP: '#4F5D95',
+  Ruby: '#701516',
+  Swift: '#F05138',
+  Kotlin: '#A97BFF',
+  Dart: '#00B4AB',
+  HTML: '#e34c26',
+  CSS: '#563d7c',
+  Vue: '#41b883',
+  Shell: '#89e051',
+  Jupyter: '#DA5B0B',
+  MDX: '#fcb32c'
+}
+
+const SEARCH_SYNONYMS: Record<string, string[]> = {
+  voice: ['speech', 'audio', 'tts', 'stt', 'sound', 'whisper', 'voz'],
+  voz: ['voice', 'speech', 'audio', 'tts', 'stt', 'whisper'],
+  ai: ['llm', 'machine-learning', 'claude', 'gemini', 'gpt', 'agent', 'rag', 'mcp', 'ia'],
+  ia: ['ai', 'llm', 'agent', 'claude', 'gemini', 'mcp', 'skill', 'rag'],
+  agents: ['agent', 'autonomous', 'crew', 'assistant', 'swarm', 'subagent', 'agentes'],
+  agentes: ['agent', 'agents', 'autonomous', 'swarm', 'subagents', 'claude-code'],
+  mcp: ['model-context-protocol', 'connector', 'server', 'claude-code', 'cursor'],
+  skill: ['skills', 'claude-code', 'cursor', 'commands', 'prompts', 'agent-skills'],
+  ui: ['components', 'design-system', 'tailwind', 'styling', 'frontend', 'css', 'shadcn'],
+  cli: ['terminal', 'command-line', 'shell', 'bash', 'consola'],
+  video: ['ffmpeg', 'remotion', 'media', 'mp4', 'render']
+}
+
+const RESOURCE_TYPE_OPTIONS: ResourceType[] = [
+  'Skill',
+  'Servidor MCP o conector',
+  'Agente o workflow',
+  'Librería, framework o SDK',
+  'Aplicación o herramienta',
+  'Modelo o dataset',
+  'Artículo, tutorial, investigación o material educativo',
+  'Idea o proyecto',
+  'Otro / pendiente de clasificar'
+]
+
+const DISCOVER_CATEGORIES: Array<{ id: DiscoverCategory; label: string; desc: string }> = [
+  { id: 'featured', label: '⭐ Destacados', desc: 'Repositorios open-source con mayor impacto global' },
+  { id: 'mcp_agents', label: '🧩 Agentes, MCP & Skills', desc: 'Servidores MCP, Skills para Claude/Cursor y agentes autónomos' },
+  { id: 'ai', label: '🤖 IA & LLMs', desc: 'Modelos, inferencia, RAG y herramientas de IA generativa' },
+  { id: 'devtools', label: '🛠️ DevTools & Editores', desc: 'Herramientas para desarrolladores, IDEs y productividad' },
+  { id: 'cli', label: '💻 Terminal & CLI', desc: 'Utilidades de línea de comandos rápidas y modernas' },
+  { id: 'ui', label: '🎨 UI & Componentes', desc: 'Sistemas de diseño, componentes React y animaciones' },
+  { id: 'automation', label: '⚡ Automatización', desc: 'Workflows, scraping, bots y orquestadores' },
+  { id: 'new_noteworthy', label: '🚀 Nuevos Lanzamientos', desc: 'Proyectos creados en los últimos 30 días con tracción rápida' },
+  { id: 'for_you', label: '💡 Recomendados para vos', desc: 'Basado en las etiquetas y lenguajes de tu galería actual' }
+]
+
+function getLanguageColor(lang: string | null | undefined): string {
+  if (!lang) return '#7c6cf0'
+  return LANGUAGE_COLORS[lang] || '#7c6cf0'
+}
+
+function formatNum(num: number | undefined | null): string {
+  const n = Number(num) || 0
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1).replace(/\.0$/, '')}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`
+  return n.toString()
+}
+
+function formatShortDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return '—'
+  try {
+    const d = new Date(dateStr)
+    if (Number.isNaN(d.getTime())) return '—'
+    return d.toLocaleDateString('es-AR', { day: '2-digit', month: 'short', year: 'numeric' })
+  } catch {
+    return '—'
+  }
+}
+
+function getActivityBadge(dateStr: string | null | undefined) {
+  if (!dateStr) {
+    return { label: 'En archivo', dot: 'bg-[#9b91f5]', cls: 'border-[#35314f] bg-[#1a1829] text-[#bfb8ff]', days: 30 }
+  }
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) {
+    return { label: 'En archivo', dot: 'bg-[#9b91f5]', cls: 'border-[#35314f] bg-[#1a1829] text-[#bfb8ff]', days: 30 }
+  }
+  const days = Math.max(0, Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24)))
+  if (days <= 7) {
+    return {
+      label: days === 0 ? 'Activo hoy' : `Activo hace ${days}d`,
+      dot: 'bg-emerald-400',
+      cls: 'border-emerald-800/40 bg-emerald-950/40 text-emerald-300',
+      days
+    }
+  }
+  if (days <= 30) {
+    return {
+      label: 'Activo este mes',
+      dot: 'bg-teal-400',
+      cls: 'border-teal-800/40 bg-teal-950/40 text-teal-300',
+      days
+    }
+  }
+  if (days <= 90) {
+    return {
+      label: `Hace ${Math.max(1, Math.floor(days / 30))}m`,
+      dot: 'bg-amber-400',
+      cls: 'border-amber-800/40 bg-amber-950/40 text-amber-300',
+      days
+    }
+  }
+  return {
+    label: `Hace ${Math.max(3, Math.floor(days / 30))}m`,
+    dot: 'bg-zinc-500',
+    cls: 'border-border bg-[#161821] text-muted-foreground',
+    days
+  }
+}
+
+function getResourceTypeStyle(rt?: ResourceType): string {
+  switch (rt) {
+    case 'Skill':
+      return 'border-fuchsia-500/40 bg-fuchsia-950/40 text-fuchsia-300'
+    case 'Servidor MCP o conector':
+      return 'border-cyan-500/40 bg-cyan-950/40 text-cyan-300'
+    case 'Agente o workflow':
+      return 'border-violet-500/40 bg-violet-950/40 text-violet-300'
+    case 'Librería, framework o SDK':
+      return 'border-blue-500/40 bg-blue-950/40 text-blue-300'
+    case 'Aplicación o herramienta':
+      return 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300'
+    case 'Modelo o dataset':
+      return 'border-amber-500/40 bg-amber-950/40 text-amber-300'
+    default:
+      return 'border-[#383456] bg-[#211f33] text-[#c5bfff]'
+  }
+}
+
+function extractGitHubReposFromFreeText(text: string): Array<{ owner: string; repo: string; cleanUrl: string }> {
+  if (!text) return []
+  const rx = /(?:https?:\/\/)?(?:www\.)?github\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:[^\s<>"'`)\]]*)?/gi
+  const reserved = new Set([
+    'about', 'pricing', 'features', 'enterprise', 'topics', 'trending', 'collections',
+    'events', 'sponsors', 'readme', 'settings', 'notifications', 'new', 'organizations',
+    'orgs', 'users', 'marketplace', 'explore', 'search', 'login', 'join', 'pulls', 'issues'
+  ])
+  const seen = new Set<string>()
+  const out: Array<{ owner: string; repo: string; cleanUrl: string }> = []
+  let m: RegExpExecArray | null
+  while ((m = rx.exec(text)) !== null) {
+    const owner = m[1].trim()
+    let repo = m[2].trim().replace(/[.,;:!?)\],'">]+$/, '')
+    if (repo.endsWith('.git')) repo = repo.slice(0, -4)
+    repo = repo.replace(/\/+$/, '')
+    if (!owner || !repo) continue
+    if (reserved.has(owner.toLowerCase()) || reserved.has(repo.toLowerCase())) continue
+    const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      out.push({ owner, repo, cleanUrl: `https://github.com/${owner}/${repo}` })
+    }
+  }
+  return out
+}
+
+export function ReposView({
+  bookmarks,
+  onOpenBookmarkDetail,
+  onRefreshBookmarks,
+  initialSelectedRepoFullName,
+  onClearInitialSelectedRepo
+}: ReposViewProps) {
+  const [repositories, setRepositories] = useState<GalleryRepository[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+  const [activeSubTab, setActiveSubTab] = useState<'gallery' | 'discover'>('gallery')
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid')
+
+  // Search & filters
+  const [searchQuery, setSearchQuery] = useState('')
+  const [selectedResourceType, setSelectedResourceType] = useState<string>('all')
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('')
+  const [selectedTopic, setSelectedTopic] = useState<string>('')
+  const [selectedActivity, setSelectedActivity] = useState<ActivityFilterType>('ALL')
+  const [selectedCreatedAt, setSelectedCreatedAt] = useState<CreatedAtFilterType>('ALL')
+  const [originFilter, setOriginFilter] = useState<'all' | 'from_bookmarks' | 'direct'>('all')
+  const [sortBy, setSortBy] = useState<RepoSortByType>('bookmarks_desc')
+
+  // Multi-selection
+  const [selectedRepoKeys, setSelectedRepoKeys] = useState<Set<string>>(new Set())
+  const [copiedType, setCopiedType] = useState<'urls' | 'markdown' | null>(null)
+
+  // Detail modal
+  const [detailRepo, setDetailRepo] = useState<GalleryRepository | null>(null)
+  const [isRefreshingRepo, setIsRefreshingRepo] = useState(false)
+  const [isRegeneratingAi, setIsRegeneratingAi] = useState(false)
+  const [repoChatHistory, setRepoChatHistory] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([])
+  const [repoChatInput, setRepoChatInput] = useState('')
+  const [isRepoChatLoading, setIsRepoChatLoading] = useState(false)
+
+  // Modals: Add URL, Bulk Text Import, Settings
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false)
+  const [addUrlInput, setAddUrlInput] = useState('')
+  const [addNotesInput, setAddNotesInput] = useState('')
+  const [isAddingRepo, setIsAddingRepo] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+
+  const [isBulkTextModalOpen, setIsBulkTextModalOpen] = useState(false)
+  const [bulkTextInput, setBulkTextInput] = useState('')
+  const [bulkSelectedUrls, setBulkSelectedUrls] = useState<Set<string>>(new Set())
+  const [isBulkImporting, setIsBulkImporting] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null)
+
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [githubToken, setGithubToken] = useState('')
+  const [rateLimit, setRateLimit] = useState<RateLimitInfo | null>(null)
+  const [isCheckingRateLimit, setIsCheckingRateLimit] = useState(false)
+  const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([])
+  const [selectedAiProvider, setSelectedAiProvider] = useState<AiProviderId>('gemini')
+
+  // Batch GitHub API enrichment state
+  const [isBatchEnriching, setIsBatchEnriching] = useState(false)
+  const [statusBanner, setStatusBanner] = useState<{ type: 'ok' | 'info' | 'error'; text: string } | null>(null)
+
+  // Discover state
+  const [discoverCategory, setDiscoverCategory] = useState<DiscoverCategory>('mcp_agents')
+  const [discoverQuery, setDiscoverQuery] = useState('')
+  const [discoverLanguage, setDiscoverLanguage] = useState('')
+  const [discoverCreated, setDiscoverCreated] = useState<CreatedAtFilterType>('ALL')
+  const [discoverPage, setDiscoverPage] = useState(1)
+  const [discoverItems, setDiscoverItems] = useState<GalleryRepository[]>([])
+  const [discoverTotal, setDiscoverTotal] = useState(0)
+  const [discoverHasMore, setDiscoverHasMore] = useState(false)
+  const [isDiscoverLoading, setIsDiscoverLoading] = useState(false)
+  const [discoverError, setDiscoverError] = useState<string | null>(null)
+  const [savingDiscoverKey, setSavingDiscoverKey] = useState<string | null>(null)
+
+  // Global Gallery Assistant state
+  const [isGalleryChatOpen, setIsGalleryChatOpen] = useState(false)
+  const [galleryChatMessages, setGalleryChatMessages] = useState<
+    Array<{ role: 'user' | 'assistant'; content: string }>
+  >([
+    {
+      role: 'assistant',
+      content:
+        '¡Hola! Soy el Asistente de tu Galería de GitHub en Atlas. Puedo ayudarte a encontrar qué repositorios, Skills, Servidores MCP o librerías tenés guardados para un proyecto, compararlos o recomendarte alternativas.'
+    }
+  ])
+  const [galleryChatInput, setGalleryChatInput] = useState('')
+  const [isGalleryChatLoading, setIsGalleryChatLoading] = useState(false)
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Load token and AI provider preference from localStorage
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedTok = localStorage.getItem('atlas_github_pat') || ''
+      const savedProv = (localStorage.getItem('atlas_ai_provider') as AiProviderId) || 'gemini'
+      setGithubToken(savedTok)
+      setSelectedAiProvider(savedProv)
+    }
+  }, [])
+
+  const fetchRepositories = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const res = await fetch('/api/github/repos')
+      const data = await res.json()
+      if (res.ok && data.success && Array.isArray(data.repositories)) {
+        setRepositories(data.repositories)
+        setDetailRepo(prev => {
+          if (!prev) return null
+          return (
+            data.repositories.find(
+              (r: GalleryRepository) => r.fullName.toLowerCase() === prev.fullName.toLowerCase()
+            ) || prev
+          )
+        })
+      }
+    } catch (err) {
+      console.error('Error cargando galería de repositorios:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  const fetchAiProviders = useCallback(async () => {
+    try {
+      const res = await fetch('/api/github/ai')
+      const data = await res.json()
+      if (res.ok && data.success && Array.isArray(data.providers)) {
+        setAiProviders(data.providers)
+      }
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    fetchRepositories()
+    fetchAiProviders()
+  }, [fetchRepositories, fetchAiProviders])
+
+  // Open initial repo if navigated from LibraryView / DetailSheet
+  useEffect(() => {
+    if (initialSelectedRepoFullName && repositories.length > 0) {
+      const target = repositories.find(
+        r => r.fullName.toLowerCase() === initialSelectedRepoFullName.toLowerCase()
+      )
+      if (target) {
+        setDetailRepo(target)
+        setRepoChatHistory([])
+        onClearInitialSelectedRepo?.()
+      }
+    }
+  }, [initialSelectedRepoFullName, repositories, onClearInitialSelectedRepo])
+
+  // Map bookmark IDs for instant lookup of linked saved posts
+  const bookmarksById = useMemo(() => {
+    const map = new Map<string, BookmarkItem>()
+    for (const b of bookmarks) {
+      map.set(b.id, b)
+    }
+    return map
+  }, [bookmarks])
+
+  // Get all bookmarks linked to a given repository
+  const getLinkedBookmarksForRepo = useCallback(
+    (repo: GalleryRepository): BookmarkItem[] => {
+      const ids = new Set<string>(repo.linkedBookmarkIds || [])
+      const fullLower = repo.fullName.toLowerCase()
+      for (const b of bookmarks) {
+        if (ids.has(b.id)) continue
+        const mentionsInResources = (b.resources || []).some(
+          r =>
+            r.kind === 'github_repo' &&
+            (r.fullName?.toLowerCase() === fullLower ||
+              (r.resolvedUrl || r.url).toLowerCase().includes(`github.com/${fullLower}`))
+        )
+        const mentionsInLinks = (b.outgoingLinks || []).some(u =>
+          u.toLowerCase().includes(`github.com/${fullLower}`)
+        )
+        if (mentionsInResources || mentionsInLinks) {
+          ids.add(b.id)
+        }
+      }
+      return Array.from(ids)
+        .map(id => bookmarksById.get(id))
+        .filter((b): b is BookmarkItem => Boolean(b))
+    },
+    [bookmarks, bookmarksById]
+  )
+
+  // Available languages and topics across the gallery
+  const availableLanguages = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of repositories) {
+      if (r.primaryLanguage) {
+        counts.set(r.primaryLanguage, (counts.get(r.primaryLanguage) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name)
+  }, [repositories])
+
+  const availableTopics = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of repositories) {
+      for (const t of r.topics || []) {
+        if (t) counts.set(t, (counts.get(t) || 0) + 1)
+      }
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 40)
+      .map(([name]) => name)
+  }, [repositories])
+
+  // Filtered and sorted repositories
+  const filteredRepositories = useMemo(() => {
+    const rawQ = searchQuery.trim().toLowerCase()
+    const words = rawQ ? rawQ.split(/\s+/).filter(Boolean) : []
+
+    return repositories
+      .filter(repo => {
+        if (selectedResourceType !== 'all' && repo.resourceType !== selectedResourceType) {
+          return false
+        }
+        if (selectedLanguage && repo.primaryLanguage !== selectedLanguage) {
+          return false
+        }
+        if (selectedTopic && !(repo.topics || []).includes(selectedTopic)) {
+          return false
+        }
+        if (originFilter === 'from_bookmarks') {
+          const nonGhLinks = (repo.linkedBookmarkIds || []).filter(id => !id.startsWith('github:'))
+          if (nonGhLinks.length === 0) return false
+        } else if (originFilter === 'direct') {
+          const nonGhLinks = (repo.linkedBookmarkIds || []).filter(id => !id.startsWith('github:'))
+          if (nonGhLinks.length > 0) return false
+        }
+
+        if (selectedActivity !== 'ALL') {
+          const act = getActivityBadge(repo.pushedAt || repo.updatedAt)
+          if (selectedActivity === 'active_week' && act.days > 7) return false
+          if (selectedActivity === 'active_month' && act.days > 30) return false
+          if (selectedActivity === 'active_quarter' && act.days > 90) return false
+          if (selectedActivity === 'inactive' && act.days <= 90) return false
+        }
+
+        if (selectedCreatedAt !== 'ALL' && repo.createdAt) {
+          const daysOld = Math.max(0, (Date.now() - new Date(repo.createdAt).getTime()) / (1000 * 60 * 60 * 24))
+          if (selectedCreatedAt === 'week' && daysOld > 7) return false
+          if (selectedCreatedAt === 'month' && daysOld > 30) return false
+          if (selectedCreatedAt === 'three_months' && daysOld > 90) return false
+          if (selectedCreatedAt === 'six_months' && daysOld > 180) return false
+          if (selectedCreatedAt === 'year' && daysOld > 365) return false
+        }
+
+        if (words.length > 0) {
+          const hay = [
+            repo.owner,
+            repo.name,
+            repo.fullName,
+            repo.description,
+            repo.shortExplanationEs || '',
+            repo.longExplanationEs || '',
+            repo.resourceType || '',
+            repo.primaryLanguage || '',
+            repo.notes || '',
+            ...(repo.topics || [])
+          ]
+            .join(' ')
+            .toLowerCase()
+
+          const matchesAllWords = words.every(w => {
+            const expanded = [w, ...(SEARCH_SYNONYMS[w] || [])]
+            return expanded.some(term => hay.includes(term))
+          })
+          if (!matchesAllWords) return false
+        }
+
+        return true
+      })
+      .sort((a, b) => {
+        if (sortBy === 'bookmarks_desc') {
+          const bCount = (b.linkedBookmarkIds || []).length - (a.linkedBookmarkIds || []).length
+          if (bCount !== 0) return bCount
+          return (b.stars || 0) - (a.stars || 0)
+        }
+        if (sortBy === 'stars_desc') {
+          return (b.stars || 0) - (a.stars || 0)
+        }
+        if (sortBy === 'updated_desc') {
+          return new Date(b.pushedAt || b.updatedAt || 0).getTime() - new Date(a.pushedAt || a.updatedAt || 0).getTime()
+        }
+        if (sortBy === 'created_desc') {
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+        }
+        if (sortBy === 'added_desc') {
+          return new Date(b.addedAt || 0).getTime() - new Date(a.addedAt || 0).getTime()
+        }
+        if (sortBy === 'name_asc') {
+          return a.fullName.localeCompare(b.fullName)
+        }
+        return 0
+      })
+  }, [
+    repositories,
+    searchQuery,
+    selectedResourceType,
+    selectedLanguage,
+    selectedTopic,
+    originFilter,
+    selectedActivity,
+    selectedCreatedAt,
+    sortBy
+  ])
+
+  // KPI metrics
+  const kpis = useMemo(() => {
+    const total = repositories.length
+    const linkedToPosts = repositories.filter(r =>
+      (r.linkedBookmarkIds || []).some(id => !id.startsWith('github:'))
+    ).length
+    const skillsAndMcp = repositories.filter(
+      r =>
+        r.resourceType === 'Skill' ||
+        r.resourceType === 'Servidor MCP o conector' ||
+        r.resourceType === 'Agente o workflow'
+    ).length
+    const enrichedWithStars = repositories.filter(r => (r.stars || 0) > 0).length
+    return { total, linkedToPosts, skillsAndMcp, enrichedWithStars }
+  }, [repositories])
+
+  // Discover fetcher
+  const loadDiscoverRepos = useCallback(
+    async (pageToLoad = 1) => {
+      setIsDiscoverLoading(true)
+      setDiscoverError(null)
+      try {
+        const params = new URLSearchParams()
+        params.set('category', discoverCategory)
+        if (discoverQuery.trim()) params.set('query', discoverQuery.trim())
+        if (discoverLanguage) params.set('language', discoverLanguage)
+        if (discoverCreated !== 'ALL') params.set('createdFilter', discoverCreated)
+        params.set('page', String(pageToLoad))
+        params.set('perPage', '15')
+        if (availableTopics.length > 0) {
+          params.set('userTopics', availableTopics.slice(0, 5).join(','))
+        }
+        if (availableLanguages.length > 0) {
+          params.set('userLanguages', availableLanguages.slice(0, 3).join(','))
+        }
+
+        const headers: Record<string, string> = {}
+        if (githubToken.trim()) headers['x-github-token'] = githubToken.trim()
+
+        const res = await fetch(`/api/github/discover?${params.toString()}`, { headers })
+        const data = await res.json()
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'No se pudo consultar GitHub Discover.')
+        }
+        setDiscoverItems(data.items || [])
+        setDiscoverTotal(data.totalCount || 0)
+        setDiscoverHasMore(Boolean(data.hasMore))
+        setDiscoverPage(pageToLoad)
+      } catch (err: any) {
+        setDiscoverError(err.message || 'Error al explorar GitHub.')
+      } finally {
+        setIsDiscoverLoading(false)
+      }
+    },
+    [discoverCategory, discoverQuery, discoverLanguage, discoverCreated, availableTopics, availableLanguages, githubToken]
+  )
+
+  useEffect(() => {
+    if (activeSubTab === 'discover') {
+      loadDiscoverRepos(1)
+    }
+  }, [activeSubTab, discoverCategory, discoverLanguage, discoverCreated, loadDiscoverRepos])
+
+  // Check rate limit
+  const handleCheckRateLimit = async () => {
+    setIsCheckingRateLimit(true)
+    try {
+      const headers: Record<string, string> = {}
+      if (githubToken.trim()) headers['x-github-token'] = githubToken.trim()
+      const res = await fetch('/api/github/discover?checkRateLimit=true', { headers })
+      const data = await res.json()
+      if (res.ok && data.rateLimit) {
+        setRateLimit(data.rateLimit)
+      }
+    } catch {} finally {
+      setIsCheckingRateLimit(false)
+    }
+  }
+
+  // Save settings
+  const handleSaveSettings = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('atlas_github_pat', githubToken.trim())
+      localStorage.setItem('atlas_ai_provider', selectedAiProvider)
+    }
+    setStatusBanner({
+      type: 'ok',
+      text: 'Preferencias de GitHub Token y Proveedor de IA guardadas correctamente.'
+    })
+    setIsSettingsOpen(false)
+  }
+
+  // Add single repo by URL
+  const handleAddSingleRepo = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!addUrlInput.trim()) return
+    setIsAddingRepo(true)
+    setAddError(null)
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'add-url',
+          url: addUrlInput.trim(),
+          notes: addNotesInput.trim(),
+          token: githubToken.trim() || undefined,
+          provider: selectedAiProvider
+        })
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'No se pudo obtener el repositorio.')
+      }
+      await fetchRepositories()
+      await onRefreshBookmarks()
+      setAddUrlInput('')
+      setAddNotesInput('')
+      setIsAddModalOpen(false)
+      setDetailRepo(data.repository)
+      setStatusBanner({
+        type: 'ok',
+        text: `Repositorio ${data.repository.fullName} agregado a la Galería y sincronizado con tu Biblioteca.`
+      })
+    } catch (err: any) {
+      setAddError(err.message || 'Error al agregar repositorio.')
+    } finally {
+      setIsAddingRepo(false)
+    }
+  }
+
+  // Save repo from Discover or Chatbot
+  const handleSaveDiscoverRepo = async (repo: GalleryRepository) => {
+    const key = repo.fullName.toLowerCase()
+    setSavingDiscoverKey(key)
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save-repo',
+          repository: repo
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        await fetchRepositories()
+        await onRefreshBookmarks()
+        setStatusBanner({
+          type: 'ok',
+          text: `${repo.fullName} guardado en tu Galería y Biblioteca de Atlas.`
+        })
+      }
+    } catch (err) {
+      console.error('Error guardando repo de Discover:', err)
+    } finally {
+      setSavingDiscoverKey(null)
+    }
+  }
+
+  // Enrich single or batch of repos from GitHub API
+  const handleEnrichReposWithGitHubApi = async (repoNames: string[]) => {
+    if (repoNames.length === 0) return
+    setIsBatchEnriching(true)
+    setStatusBanner({
+      type: 'info',
+      text: `Consultando GitHub API y README para ${repoNames.length} repositorio(s)...`
+    })
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'refresh-repo',
+          repos: repoNames,
+          token: githubToken.trim() || undefined,
+          provider: selectedAiProvider
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        await fetchRepositories()
+        await onRefreshBookmarks()
+        setStatusBanner({
+          type: 'ok',
+          text: `Se enriquecieron ${data.refreshedCount} repositorio(s) con estrellas reales, lenguajes, imagen de README y análisis en español.${
+            data.errors?.length ? ` (${data.errors.length} omitidos por límite de API).` : ''
+          }`
+        })
+      } else {
+        setStatusBanner({
+          type: 'error',
+          text: data.error || 'No se pudieron enriquecer los repositorios.'
+        })
+      }
+    } catch (err: any) {
+      setStatusBanner({
+        type: 'error',
+        text: err.message || 'Error de red al consultar GitHub API.'
+      })
+    } finally {
+      setIsBatchEnriching(false)
+    }
+  }
+
+  // Refresh single repo inside detail modal
+  const handleRefreshDetailRepo = async () => {
+    if (!detailRepo) return
+    setIsRefreshingRepo(true)
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'refresh-repo',
+          fullName: detailRepo.fullName,
+          token: githubToken.trim() || undefined,
+          provider: selectedAiProvider
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success && data.repositories?.[0]) {
+        setDetailRepo(data.repositories[0])
+        await fetchRepositories()
+        await onRefreshBookmarks()
+      }
+    } catch {} finally {
+      setIsRefreshingRepo(false)
+    }
+  }
+
+  // Regenerate Spanish explanation with AI inside detail modal
+  const handleRegenerateRepoAi = async () => {
+    if (!detailRepo) return
+    setIsRegeneratingAi(true)
+    try {
+      const res = await fetch('/api/github/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'explain-repo',
+          repo: detailRepo,
+          provider: selectedAiProvider,
+          token: githubToken.trim() || undefined
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        const updated = data.repository || {
+          ...detailRepo,
+          shortExplanationEs: data.shortExplanationEs,
+          longExplanationEs: data.longExplanationEs,
+          resourceType: data.resourceType || detailRepo.resourceType
+        }
+        setDetailRepo(updated)
+        await fetchRepositories()
+      }
+    } catch {} finally {
+      setIsRegeneratingAi(false)
+    }
+  }
+
+  // Update repo fields (resourceType / notes)
+  const handleUpdateRepoFields = async (patch: Partial<GalleryRepository>) => {
+    if (!detailRepo) return
+    const optimistic = { ...detailRepo, ...patch }
+    setDetailRepo(optimistic)
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update-repo',
+          fullName: detailRepo.fullName,
+          ...patch
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.repository) {
+        setDetailRepo(data.repository)
+        await fetchRepositories()
+        await onRefreshBookmarks()
+      }
+    } catch {}
+  }
+
+  // Ask per-repo AI chat
+  const handleAskRepoChat = async (questionText?: string) => {
+    if (!detailRepo) return
+    const q = (questionText ?? repoChatInput).trim()
+    if (!q || isRepoChatLoading) return
+    const nextHist: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      ...repoChatHistory,
+      { role: 'user', content: q }
+    ]
+    setRepoChatHistory(nextHist)
+    if (!questionText) setRepoChatInput('')
+    setIsRepoChatLoading(true)
+
+    try {
+      const res = await fetch('/api/github/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'repo-chat',
+          repo: detailRepo,
+          question: q,
+          history: repoChatHistory,
+          provider: selectedAiProvider
+        })
+      })
+      const data = await res.json()
+      setRepoChatHistory([
+        ...nextHist,
+        {
+          role: 'assistant',
+          content: data.answer || data.error || 'No se pudo obtener respuesta.'
+        }
+      ])
+    } catch {
+      setRepoChatHistory([
+        ...nextHist,
+        { role: 'assistant', content: 'Error de conexión al consultar al asistente del repositorio.' }
+      ])
+    } finally {
+      setIsRepoChatLoading(false)
+    }
+  }
+
+  // Ask global Gallery Assistant
+  const handleAskGalleryChat = async (questionText?: string) => {
+    const q = (questionText ?? galleryChatInput).trim()
+    if (!q || isGalleryChatLoading) return
+    const nextHist: Array<{ role: 'user' | 'assistant'; content: string }> = [
+      ...galleryChatMessages,
+      { role: 'user', content: q }
+    ]
+    setGalleryChatMessages(nextHist)
+    if (!questionText) setGalleryChatInput('')
+    setIsGalleryChatLoading(true)
+
+    try {
+      const res = await fetch('/api/github/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'gallery-chat',
+          question: q,
+          history: galleryChatMessages.slice(-8),
+          provider: selectedAiProvider
+        })
+      })
+      const data = await res.json()
+      setGalleryChatMessages([
+        ...nextHist,
+        {
+          role: 'assistant',
+          content: data.answer || data.error || 'No se pudo generar respuesta.'
+        }
+      ])
+    } catch {
+      setGalleryChatMessages([
+        ...nextHist,
+        { role: 'assistant', content: 'Error al conectar con el asistente de galería.' }
+      ])
+    } finally {
+      setIsGalleryChatLoading(false)
+    }
+  }
+
+  // Bulk text import detection
+  const detectedBulkRepos = useMemo(() => {
+    const extracted = extractGitHubReposFromFreeText(bulkTextInput)
+    const existingSet = new Set(repositories.map(r => r.fullName.toLowerCase()))
+    return extracted.map(item => ({
+      ...item,
+      fullName: `${item.owner}/${item.repo}`,
+      alreadyInGallery: existingSet.has(`${item.owner.toLowerCase()}/${item.repo.toLowerCase()}`)
+    }))
+  }, [bulkTextInput, repositories])
+
+  useEffect(() => {
+    const newOnes = detectedBulkRepos.filter(d => !d.alreadyInGallery).map(d => d.cleanUrl)
+    setBulkSelectedUrls(new Set(newOnes))
+  }, [detectedBulkRepos])
+
+  const handleRunBulkTextImport = async () => {
+    const urls = Array.from(bulkSelectedUrls)
+    if (urls.length === 0) return
+    setIsBulkImporting(true)
+    setBulkProgress({ current: 0, total: urls.length })
+
+    let added = 0
+    for (let i = 0; i < urls.length; i++) {
+      setBulkProgress({ current: i + 1, total: urls.length })
+      try {
+        const res = await fetch('/api/github/repos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'add-url',
+            url: urls[i],
+            token: githubToken.trim() || undefined,
+            provider: selectedAiProvider
+          })
+        })
+        if (res.ok) added++
+      } catch {}
+    }
+
+    await fetchRepositories()
+    await onRefreshBookmarks()
+    setIsBulkImporting(false)
+    setBulkProgress(null)
+    setIsBulkTextModalOpen(false)
+    setBulkTextInput('')
+    setStatusBanner({
+      type: 'ok',
+      text: `Importación desde texto completada: ${added} de ${urls.length} repositorios incorporados a tu galería.`
+    })
+  }
+
+  // Export gallery JSON (compatible with github-visual-gallery v2.0)
+  const handleExportGalleryJson = (onlySelected = false) => {
+    const list = onlySelected
+      ? repositories.filter(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
+      : repositories
+    const payload = {
+      repositories: list,
+      customOrder: list.map(r => r.id),
+      exportedAt: new Date().toISOString(),
+      version: '2.0'
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `github-visual-gallery-${new Date().toISOString().split('T')[0]}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  // Import gallery JSON file
+  const handleImportGalleryJsonFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'import-json',
+          jsonText: text
+        })
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'No se pudo importar el archivo JSON.')
+      }
+      await fetchRepositories()
+      await onRefreshBookmarks()
+      setStatusBanner({
+        type: 'ok',
+        text: `JSON de galería importado: ${data.added} nuevos, ${data.updated} actualizados (${data.total} total en galería).`
+      })
+    } catch (err: any) {
+      setStatusBanner({
+        type: 'error',
+        text: err.message || 'Error al importar JSON de galería.'
+      })
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }
+
+  // Multi-selection helpers
+  const toggleSelectRepo = (fullName: string) => {
+    const key = fullName.toLowerCase()
+    setSelectedRepoKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const handleCopySelected = async (mode: 'urls' | 'markdown') => {
+    const selected = repositories.filter(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
+    if (selected.length === 0) return
+    const text =
+      mode === 'urls'
+        ? selected.map(r => `https://github.com/${r.fullName}`).join('\n')
+        : selected
+            .map(r => {
+              const desc = r.shortExplanationEs || r.description || 'Sin descripción'
+              const meta = [
+                r.resourceType ? `[${r.resourceType}]` : '',
+                r.stars > 0 ? `⭐ ${formatNum(r.stars)}` : '',
+                r.primaryLanguage || ''
+              ]
+                .filter(Boolean)
+                .join(' · ')
+              return `- [**${r.fullName}**](https://github.com/${r.fullName}) — ${desc}${meta ? ` (${meta})` : ''}`
+            })
+            .join('\n')
+
+    await navigator.clipboard.writeText(text)
+    setCopiedType(mode)
+    setTimeout(() => setCopiedType(null), 2200)
+  }
+
+  const handleDeleteSelectedRepos = async () => {
+    const keys = Array.from(selectedRepoKeys)
+    if (keys.length === 0) return
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repos: keys })
+      })
+      if (res.ok) {
+        setSelectedRepoKeys(new Set())
+        await fetchRepositories()
+      }
+    } catch {}
+  }
+
+  const existingFullNamesSet = useMemo(
+    () => new Set(repositories.map(r => r.fullName.toLowerCase())),
+    [repositories]
+  )
+
+  return (
+    <div className="space-y-6 pb-20">
+      {/* Hidden JSON file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json"
+        onChange={handleImportGalleryJsonFile}
+        className="hidden"
+      />
+
+      {/* Header Principal */}
+      <div className="flex flex-col gap-4 rounded-xl border border-border bg-[#15171f] p-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="grid size-9 place-items-center rounded-lg bg-[#7c6cf0]/20 text-[#b4abff] border border-[#7c6cf0]/40">
+              <FolderGit2 className="size-5" />
+            </div>
+            <h1 className="font-serif text-2xl font-medium tracking-tight text-foreground">
+              Galería Visual de Repositorios GitHub
+            </h1>
+            <Badge className="bg-[#28263b] text-[#bfb8ff] border-[#3d3960]">
+              {kpis.total} repositorios
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground max-w-3xl">
+            Unifica automáticamente los repositorios descubiertos en tus guardados de X, Instagram y WhatsApp con el explorador visual de GitHub. Clasificá Skills, Servidores MCP, Agentes y Librerías, consultá su README con IA e importá/exportá en 1 clic.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            onClick={() => setIsAddModalOpen(true)}
+            className="bg-[#7c6cf0] text-white hover:bg-[#6d5ce0] text-xs gap-1.5"
+          >
+            <Plus className="size-3.5" /> Agregar Repo
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setIsBulkTextModalOpen(true)}
+            className="border-border bg-[#1b1d27] text-xs gap-1.5"
+          >
+            <FileText className="size-3.5 text-[#a59cf5]" /> Importar de Texto
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isBatchEnriching}
+            onClick={() => {
+              const targetNames =
+                selectedRepoKeys.size > 0
+                  ? Array.from(selectedRepoKeys)
+                  : filteredRepositories
+                      .filter(r => (r.stars || 0) === 0)
+                      .slice(0, 8)
+                      .map(r => r.fullName)
+              if (targetNames.length === 0 && filteredRepositories.length > 0) {
+                handleEnrichReposWithGitHubApi(filteredRepositories.slice(0, 6).map(r => r.fullName))
+              } else {
+                handleEnrichReposWithGitHubApi(targetNames)
+              }
+            }}
+            className="border-border bg-[#1b1d27] text-xs gap-1.5"
+            title="Consulta la API de GitHub para traer estrellas, forks, lenguajes e imagen del README"
+          >
+            <RefreshCw className={`size-3.5 text-emerald-400 ${isBatchEnriching ? 'animate-spin' : ''}`} />
+            {isBatchEnriching ? 'Enriqueciendo...' : 'Enriquecer con GitHub API'}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => handleExportGalleryJson(false)}
+            className="border-border bg-[#1b1d27] text-xs gap-1.5"
+            title="Exportar galería en formato JSON compatible con GitHub Visual Gallery"
+          >
+            <Download className="size-3.5" /> Exportar JSON
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => fileInputRef.current?.click()}
+            className="border-border bg-[#1b1d27] text-xs gap-1.5"
+            title="Importar archivo JSON de GitHub Visual Gallery"
+          >
+            <Upload className="size-3.5" /> Importar JSON
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setIsSettingsOpen(true)
+              handleCheckRateLimit()
+            }}
+            className="border border-border bg-[#161821] text-xs gap-1.5"
+          >
+            <Settings2 className="size-3.5 text-[#a59cf5]" /> Token & IA
+          </Button>
+        </div>
+      </div>
+
+      {/* Banner informativo */}
+      {statusBanner && (
+        <div
+          className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-2.5 text-xs ${
+            statusBanner.type === 'error'
+              ? 'border-red-500/40 bg-red-950/30 text-red-200'
+              : statusBanner.type === 'info'
+              ? 'border-blue-500/40 bg-blue-950/30 text-blue-200'
+              : 'border-emerald-500/40 bg-emerald-950/30 text-emerald-200'
+          }`}
+        >
+          <span>{statusBanner.text}</span>
+          <button onClick={() => setStatusBanner(null)} className="text-muted-foreground hover:text-white">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Tarjetas de Resumen Rápido */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-border bg-[#15171f] p-3.5">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Total en Galería</p>
+          <p className="mt-1 font-serif text-2xl font-medium text-foreground">{kpis.total}</p>
+          <p className="mt-0.5 text-[11px] text-[#9b91f5]">Proyectos únicos en SQLite</p>
+        </div>
+        <div className="rounded-xl border border-border bg-[#15171f] p-3.5">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Desde tus Guardados</p>
+          <p className="mt-1 font-serif text-2xl font-medium text-emerald-300">{kpis.linkedToPosts}</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Vinculados a posts de X / IG / WA</p>
+        </div>
+        <div className="rounded-xl border border-border bg-[#15171f] p-3.5">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Skills, MCP & Agentes</p>
+          <p className="mt-1 font-serif text-2xl font-medium text-fuchsia-300">{kpis.skillsAndMcp}</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Herramientas para agentes de IA</p>
+        </div>
+        <div className="rounded-xl border border-border bg-[#15171f] p-3.5">
+          <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Lenguajes Detectados</p>
+          <p className="mt-1 font-serif text-2xl font-medium text-cyan-300">{availableLanguages.length}</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
+            {availableLanguages.slice(0, 3).join(', ') || 'TypeScript, Python, Rust'}
+          </p>
+        </div>
+      </div>
+
+      {/* Sub-pestañas: Mi Galería vs Descubrir en GitHub */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveSubTab('gallery')}
+            className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium transition-all ${
+              activeSubTab === 'gallery'
+                ? 'bg-[#7c6cf0] text-white shadow-sm'
+                : 'bg-[#161821] text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <FolderGit2 className="size-4" />
+            <span>Mi Galería de Repositorios ({filteredRepositories.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveSubTab('discover')}
+            className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium transition-all ${
+              activeSubTab === 'discover'
+                ? 'bg-[#7c6cf0] text-white shadow-sm'
+                : 'bg-[#161821] text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Compass className="size-4" />
+            <span>Descubrir en GitHub (Live)</span>
+          </button>
+        </div>
+
+        {activeSubTab === 'gallery' && (
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => setIsGalleryChatOpen(true)}
+              className="border-[#3c3761] bg-[#211e34] text-xs text-[#cfcaff] hover:bg-[#2b2744] gap-1.5"
+            >
+              <Bot className="size-3.5 text-[#a59cf5]" /> Consultar a la Galería con IA
+            </Button>
+
+            <div className="flex items-center rounded-lg border border-border bg-[#15171f] p-0.5">
+              <button
+                onClick={() => setViewMode('grid')}
+                className={`rounded-md px-2.5 py-1 text-xs ${
+                  viewMode === 'grid' ? 'bg-[#28263b] text-[#bfb8ff]' : 'text-muted-foreground'
+                }`}
+                title="Vista de tarjetas visuales"
+              >
+                <LayoutGrid className="size-3.5" />
+              </button>
+              <button
+                onClick={() => setViewMode('table')}
+                className={`rounded-md px-2.5 py-1 text-xs ${
+                  viewMode === 'table' ? 'bg-[#28263b] text-[#bfb8ff]' : 'text-muted-foreground'
+                }`}
+                title="Vista de tabla compacta"
+              >
+                <List className="size-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ===================================================================== */}
+      {/* SUB-VISTA 1: MI GALERÍA DE REPOSITORIOS                              */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'gallery' && (
+        <div className="space-y-5">
+          {/* Buscador y Filtros Multidimensionales */}
+          <div className="rounded-xl border border-border bg-[#15171f] p-4 space-y-3">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-12">
+              <div className="relative lg:col-span-5">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  placeholder="Buscar por nombre, propósito, lenguaje o sinónimos (ej: mcp, skill, agentes, voz, video, ui)..."
+                  className="w-full rounded-lg border border-border bg-[#101218] py-2 pl-9 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:col-span-7">
+                <select
+                  value={selectedResourceType}
+                  onChange={e => setSelectedResourceType(e.target.value)}
+                  className="rounded-lg border border-border bg-[#101218] px-2.5 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                >
+                  <option value="all">Tipo: Todos ({repositories.length})</option>
+                  {RESOURCE_TYPE_OPTIONS.map(rt => (
+                    <option key={rt} value={rt}>
+                      {rt}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={selectedLanguage}
+                  onChange={e => setSelectedLanguage(e.target.value)}
+                  className="rounded-lg border border-border bg-[#101218] px-2.5 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                >
+                  <option value="">Lenguaje: Todos</option>
+                  {availableLanguages.map(lang => (
+                    <option key={lang} value={lang}>
+                      {lang}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={originFilter}
+                  onChange={e => setOriginFilter(e.target.value as any)}
+                  className="rounded-lg border border-border bg-[#101218] px-2.5 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                >
+                  <option value="all">Origen: Todos</option>
+                  <option value="from_bookmarks">📌 De Guardados (X/IG/WA)</option>
+                  <option value="direct">➕ Agregados directo en Galería</option>
+                </select>
+
+                <select
+                  value={sortBy}
+                  onChange={e => setSortBy(e.target.value as RepoSortByType)}
+                  className="rounded-lg border border-border bg-[#101218] px-2.5 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                >
+                  <option value="bookmarks_desc">Orden: Más guardados vinculados</option>
+                  <option value="stars_desc">Orden: Más estrellas ★</option>
+                  <option value="updated_desc">Orden: Última actividad</option>
+                  <option value="created_desc">Orden: Fecha de lanzamiento</option>
+                  <option value="added_desc">Orden: Agregados recientemente</option>
+                  <option value="name_asc">Orden: Nombre (A-Z)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Segunda fila de filtros rápidos: Actividad, Fecha de lanzamiento y Topics */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground mr-1 flex items-center gap-1">
+                  <SlidersHorizontal className="size-3" /> Filtros rápidos:
+                </span>
+                {(['Skill', 'Servidor MCP o conector', 'Agente o workflow', 'Librería, framework o SDK'] as ResourceType[]).map(
+                  rt => {
+                    const active = selectedResourceType === rt
+                    return (
+                      <button
+                        key={rt}
+                        onClick={() => setSelectedResourceType(active ? 'all' : rt)}
+                        className={`rounded-full border px-2.5 py-0.5 text-[11px] transition-all ${
+                          active
+                            ? 'border-[#7c6cf0] bg-[#7c6cf0]/20 text-white'
+                            : 'border-border bg-[#11131a] text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        {rt}
+                      </button>
+                    )
+                  }
+                )}
+
+                {selectedTopic && (
+                  <Badge className="gap-1 bg-[#28263b] text-[#bfb8ff] border-[#423d66] text-[11px]">
+                    #{selectedTopic}
+                    <button onClick={() => setSelectedTopic('')}>
+                      <X className="size-3" />
+                    </button>
+                  </Badge>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={selectedActivity}
+                  onChange={e => setSelectedActivity(e.target.value as ActivityFilterType)}
+                  className="rounded-md border border-border bg-[#101218] px-2 py-1 text-[11px] text-muted-foreground"
+                >
+                  <option value="ALL">Actividad: Cualquiera</option>
+                  <option value="active_week">Activo últimos 7 días</option>
+                  <option value="active_month">Activo últimos 30 días</option>
+                  <option value="active_quarter">Activo últimos 90 días</option>
+                  <option value="inactive">Sin actividad reciente</option>
+                </select>
+
+                <select
+                  value={selectedCreatedAt}
+                  onChange={e => setSelectedCreatedAt(e.target.value as CreatedAtFilterType)}
+                  className="rounded-md border border-border bg-[#101218] px-2 py-1 text-[11px] text-muted-foreground"
+                >
+                  <option value="ALL">Lanzamiento: Cualquier fecha</option>
+                  <option value="week">Lanzados esta semana</option>
+                  <option value="month">Lanzados este mes</option>
+                  <option value="three_months">Últimos 3 meses</option>
+                  <option value="six_months">Últimos 6 meses</option>
+                  <option value="year">Último año</option>
+                </select>
+
+                {(searchQuery ||
+                  selectedResourceType !== 'all' ||
+                  selectedLanguage ||
+                  selectedTopic ||
+                  originFilter !== 'all' ||
+                  selectedActivity !== 'ALL' ||
+                  selectedCreatedAt !== 'ALL') && (
+                  <button
+                    onClick={() => {
+                      setSearchQuery('')
+                      setSelectedResourceType('all')
+                      setSelectedLanguage('')
+                      setSelectedTopic('')
+                      setOriginFilter('all')
+                      setSelectedActivity('ALL')
+                      setSelectedCreatedAt('ALL')
+                    }}
+                    className="text-[11px] text-[#9b91f5] hover:underline"
+                  >
+                    Limpiar filtros
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Grid o Tabla de Repositorios */}
+          {isLoading ? (
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {[1, 2, 3, 4, 5, 6].map(n => (
+                <div key={n} className="h-[360px] animate-pulse rounded-xl border border-border bg-[#15171f]" />
+              ))}
+            </div>
+          ) : filteredRepositories.length === 0 ? (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-[#14161e] py-16 text-center">
+              <FolderGit2 className="size-10 text-muted-foreground/50 mb-3" />
+              <p className="text-sm font-medium text-foreground">
+                No se encontraron repositorios con los filtros actuales
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground max-w-md">
+                Probá limpiar los filtros, agregar un repositorio por URL o explorar proyectos en la pestaña &ldquo;Descubrir en GitHub&rdquo;.
+              </p>
+            </div>
+          ) : viewMode === 'grid' ? (
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {filteredRepositories.map(repo => {
+                const key = repo.fullName.toLowerCase()
+                const isSelected = selectedRepoKeys.has(key)
+                const linkedPosts = getLinkedBookmarksForRepo(repo)
+                const activity = getActivityBadge(repo.pushedAt || repo.updatedAt)
+
+                return (
+                  <div
+                    key={repo.fullName}
+                    onClick={() => {
+                      setDetailRepo(repo)
+                      setRepoChatHistory([])
+                    }}
+                    className={`group relative flex flex-col overflow-hidden rounded-xl border bg-[#15171f] transition-all duration-200 cursor-pointer hover:-translate-y-0.5 hover:shadow-xl ${
+                      isSelected
+                        ? 'border-[#7c6cf0] ring-2 ring-[#7c6cf0]/30'
+                        : 'border-border hover:border-[#4b4675]'
+                    }`}
+                  >
+                    {/* Imagen de Previsualización (README o GitHub OpenGraph) */}
+                    <div className="relative h-[168px] w-full overflow-hidden bg-[#0e1016] border-b border-border/60">
+                      <img
+                        src={repo.imageUrl || `https://opengraph.githubassets.com/1/${repo.owner}/${repo.name}`}
+                        alt={repo.fullName}
+                        loading="lazy"
+                        onError={e => {
+                          const target = e.currentTarget
+                          const fallback = `https://opengraph.githubassets.com/1/${repo.owner}/${repo.name}`
+                          if (target.src !== fallback) {
+                            target.src = fallback
+                          }
+                        }}
+                        className="h-full w-full object-cover object-center transition-transform duration-500 group-hover:scale-105"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-[#15171f] via-[#15171f]/25 to-transparent" />
+
+                      {/* Checkbox de selección múltiple */}
+                      <div
+                        onClick={e => {
+                          e.stopPropagation()
+                          toggleSelectRepo(repo.fullName)
+                        }}
+                        className="absolute left-3 top-3 z-10"
+                      >
+                        <div
+                          className={`grid size-6 place-items-center rounded-md border backdrop-blur-md transition-all ${
+                            isSelected
+                              ? 'border-[#7c6cf0] bg-[#7c6cf0] text-white'
+                              : 'border-white/25 bg-black/50 text-transparent hover:border-white/60'
+                          }`}
+                        >
+                          <Check className="size-3.5" />
+                        </div>
+                      </div>
+
+                      {/* Badges superiores derechos */}
+                      <div className="absolute right-3 top-3 z-10 flex flex-wrap items-center gap-1.5">
+                        {repo.imageSource === 'readme' && (
+                          <span className="rounded-md border border-emerald-500/40 bg-black/70 px-2 py-0.5 text-[10px] font-medium text-emerald-300 backdrop-blur-md">
+                            README Preview
+                          </span>
+                        )}
+                        {linkedPosts.length > 0 && (
+                          <span
+                            className="flex items-center gap-1 rounded-md border border-[#7c6cf0]/50 bg-[#1a172b]/90 px-2 py-0.5 text-[10px] font-medium text-[#cfcaff] backdrop-blur-md"
+                            title="Cantidad de publicaciones guardadas que recomiendan este repositorio"
+                          >
+                            <Bookmark className="size-2.5 fill-current" />
+                            {linkedPosts.length} {linkedPosts.length === 1 ? 'guardado' : 'guardados'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Barra inferior sobre el banner: Tipo de Recurso y Lenguaje */}
+                      <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between gap-2">
+                        <span
+                          className={`rounded-md border px-2 py-0.5 text-[10px] font-medium ${getResourceTypeStyle(
+                            repo.resourceType
+                          )}`}
+                        >
+                          {repo.resourceType || 'Repositorio'}
+                        </span>
+
+                        {repo.primaryLanguage && (
+                          <span className="flex items-center gap-1.5 rounded-md border border-white/10 bg-black/70 px-2 py-0.5 text-[10px] font-medium text-zinc-200 backdrop-blur-md">
+                            <span
+                              className="size-2 rounded-full"
+                              style={{ backgroundColor: getLanguageColor(repo.primaryLanguage) }}
+                            />
+                            {repo.primaryLanguage}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Cuerpo de la Tarjeta */}
+                    <div className="flex flex-1 flex-col p-4">
+                      {/* Owner + Nombre */}
+                      <div className="flex items-start gap-2.5">
+                        <img
+                          src={repo.avatarUrl || `https://github.com/${repo.owner}.png?size=128`}
+                          alt={repo.owner}
+                          loading="lazy"
+                          className="size-7 rounded-full border border-border bg-[#0e1016] object-cover shrink-0 mt-0.5"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[11px] text-muted-foreground">{repo.owner} /</p>
+                          <h3 className="truncate text-sm font-semibold text-foreground group-hover:text-[#b4abff] transition-colors">
+                            {repo.name}
+                          </h3>
+                        </div>
+                        <a
+                          href={repo.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          className="rounded-md p-1.5 text-muted-foreground hover:bg-[#232634] hover:text-foreground"
+                          title="Abrir en GitHub"
+                        >
+                          <ExternalLink className="size-3.5" />
+                        </a>
+                      </div>
+
+                      {/* Explicación en español (Para qué sirve) */}
+                      <div className="mt-3 rounded-lg border border-[#2a2840] bg-[#1b192b]/60 p-2.5">
+                        <p className="line-clamp-3 text-xs leading-relaxed text-[#e2def8]">
+                          {repo.shortExplanationEs || repo.explanation || repo.description}
+                        </p>
+                      </div>
+
+                      {/* Descripción original si difiere */}
+                      {repo.description &&
+                        repo.description !== 'Sin descripción provista.' &&
+                        repo.description !== repo.shortExplanationEs && (
+                          <p className="mt-2 line-clamp-2 text-[11px] text-muted-foreground">
+                            {repo.description}
+                          </p>
+                        )}
+
+                      {/* Topics */}
+                      {repo.topics && repo.topics.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-1">
+                          {repo.topics.slice(0, 4).map(t => (
+                            <button
+                              key={t}
+                              onClick={e => {
+                                e.stopPropagation()
+                                setSelectedTopic(selectedTopic === t ? '' : t)
+                              }}
+                              className="rounded-md border border-border/80 bg-[#101218] px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-[#7c6cf0] hover:text-[#bfb8ff]"
+                            >
+                              #{t}
+                            </button>
+                          ))}
+                          {repo.topics.length > 4 && (
+                            <span className="px-1 py-0.5 text-[10px] text-muted-foreground">
+                              +{repo.topics.length - 4}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Footer con Estrellas, Forks y Estado de Actividad */}
+                      <div className="mt-auto pt-3.5">
+                        <div className="flex items-center justify-between border-t border-border/60 pt-2.5 text-[11px] text-muted-foreground">
+                          <div className="flex items-center gap-3">
+                            <span className="flex items-center gap-1 font-medium text-foreground">
+                              <Star className="size-3.5 text-amber-400 fill-amber-400" />
+                              {repo.stars > 0 ? formatNum(repo.stars) : '—'}
+                            </span>
+                            {repo.forks > 0 && (
+                              <span className="flex items-center gap-1">
+                                <GitFork className="size-3 text-muted-foreground" />
+                                {formatNum(repo.forks)}
+                              </span>
+                            )}
+                          </div>
+
+                          <span
+                            className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] ${activity.cls}`}
+                          >
+                            <span className={`size-1.5 rounded-full ${activity.dot}`} />
+                            {activity.label}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            /* Vista de Tabla Compacta */
+            <div className="overflow-x-auto rounded-xl border border-border bg-[#15171f]">
+              <table className="w-full text-left text-xs">
+                <thead className="border-b border-border bg-[#101218] text-[11px] uppercase text-muted-foreground">
+                  <tr>
+                    <th className="p-3 w-8">
+                      <input
+                        type="checkbox"
+                        checked={
+                          filteredRepositories.length > 0 &&
+                          filteredRepositories.every(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
+                        }
+                        onChange={e => {
+                          if (e.target.checked) {
+                            setSelectedRepoKeys(new Set(filteredRepositories.map(r => r.fullName.toLowerCase())))
+                          } else {
+                            setSelectedRepoKeys(new Set())
+                          }
+                        }}
+                        className="rounded border-border"
+                      />
+                    </th>
+                    <th className="p-3">Repositorio</th>
+                    <th className="p-3">Tipo</th>
+                    <th className="p-3">Para qué sirve (Español)</th>
+                    <th className="p-3">Lenguaje</th>
+                    <th className="p-3">Estrellas</th>
+                    <th className="p-3">Guardados</th>
+                    <th className="p-3 text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {filteredRepositories.map(repo => {
+                    const key = repo.fullName.toLowerCase()
+                    const isSelected = selectedRepoKeys.has(key)
+                    const linkedPosts = getLinkedBookmarksForRepo(repo)
+                    return (
+                      <tr
+                        key={repo.fullName}
+                        onClick={() => {
+                          setDetailRepo(repo)
+                          setRepoChatHistory([])
+                        }}
+                        className="cursor-pointer hover:bg-[#1b1e29] transition-colors"
+                      >
+                        <td className="p-3" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectRepo(repo.fullName)}
+                            className="rounded border-border"
+                          />
+                        </td>
+                        <td className="p-3 font-medium text-foreground whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <img
+                              src={repo.avatarUrl || `https://github.com/${repo.owner}.png?size=64`}
+                              alt={repo.owner}
+                              className="size-5 rounded-full"
+                            />
+                            <span>{repo.fullName}</span>
+                          </div>
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <span
+                            className={`rounded-md border px-2 py-0.5 text-[10px] font-medium ${getResourceTypeStyle(
+                              repo.resourceType
+                            )}`}
+                          >
+                            {repo.resourceType || 'Repositorio'}
+                          </span>
+                        </td>
+                        <td className="p-3 max-w-md">
+                          <p className="line-clamp-2 text-xs text-zinc-200">
+                            {repo.shortExplanationEs || repo.description}
+                          </p>
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {repo.primaryLanguage ? (
+                            <span className="flex items-center gap-1.5">
+                              <span
+                                className="size-2 rounded-full"
+                                style={{ backgroundColor: getLanguageColor(repo.primaryLanguage) }}
+                              />
+                              {repo.primaryLanguage}
+                            </span>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                        <td className="p-3 whitespace-nowrap font-medium">
+                          {repo.stars > 0 ? `★ ${formatNum(repo.stars)}` : '—'}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <Badge variant="outline" className="text-[10px]">
+                            {linkedPosts.length} post{linkedPosts.length === 1 ? '' : 's'}
+                          </Badge>
+                        </td>
+                        <td className="p-3 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                          <a
+                            href={repo.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[#9b91f5] hover:underline"
+                          >
+                            GitHub <ExternalLink className="size-3" />
+                          </a>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* SUB-VISTA 2: DESCUBRIR EN GITHUB (LIVE SEARCH & CATEGORIES)          */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'discover' && (
+        <div className="space-y-5">
+          {/* Chips de Categorías de Descubrimiento */}
+          <div className="flex flex-wrap gap-2">
+            {DISCOVER_CATEGORIES.map(cat => (
+              <button
+                key={cat.id}
+                onClick={() => {
+                  setDiscoverCategory(cat.id)
+                  setDiscoverQuery('')
+                }}
+                className={`rounded-xl border px-3.5 py-2 text-left text-xs transition-all ${
+                  discoverCategory === cat.id && !discoverQuery
+                    ? 'border-[#7c6cf0] bg-[#28263b] text-white shadow-sm'
+                    : 'border-border bg-[#15171f] text-muted-foreground hover:border-[#4b4675] hover:text-foreground'
+                }`}
+              >
+                <div className="font-medium">{cat.label}</div>
+                <div className="text-[10px] opacity-75 line-clamp-1">{cat.desc}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* Barra de búsqueda en vivo en GitHub */}
+          <form
+            onSubmit={e => {
+              e.preventDefault()
+              loadDiscoverRepos(1)
+            }}
+            className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-[#15171f] p-3.5"
+          >
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="text"
+                value={discoverQuery}
+                onChange={e => setDiscoverQuery(e.target.value)}
+                placeholder="Buscar en todo GitHub en tiempo real (ej: mcp server, claude skill, browser agent, tts)..."
+                className="w-full rounded-lg border border-border bg-[#101218] py-2 pl-9 pr-4 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
+              />
+            </div>
+
+            <select
+              value={discoverLanguage}
+              onChange={e => setDiscoverLanguage(e.target.value)}
+              className="rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground"
+            >
+              <option value="">Cualquier lenguaje</option>
+              <option value="TypeScript">TypeScript</option>
+              <option value="Python">Python</option>
+              <option value="Rust">Rust</option>
+              <option value="Go">Go</option>
+              <option value="JavaScript">JavaScript</option>
+              <option value="Swift">Swift</option>
+            </select>
+
+            <select
+              value={discoverCreated}
+              onChange={e => setDiscoverCreated(e.target.value as CreatedAtFilterType)}
+              className="rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground"
+            >
+              <option value="ALL">Cualquier fecha</option>
+              <option value="week">Creados esta semana</option>
+              <option value="month">Creados este mes</option>
+              <option value="three_months">Últimos 3 meses</option>
+              <option value="year">Último año</option>
+            </select>
+
+            <Button type="submit" size="sm" className="bg-[#7c6cf0] text-white hover:bg-[#6c5ce0] text-xs">
+              Buscar en GitHub
+            </Button>
+          </form>
+
+          {discoverError && (
+            <div className="flex items-center justify-between rounded-lg border border-amber-500/40 bg-amber-950/30 p-3.5 text-xs text-amber-200">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="size-4 shrink-0 text-amber-400" />
+                <span>{discoverError}</span>
+              </div>
+              <Button size="xs" variant="outline" onClick={() => setIsSettingsOpen(true)}>
+                Configurar Token GitHub
+              </Button>
+            </div>
+          )}
+
+          {isDiscoverLoading ? (
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {[1, 2, 3, 4, 5, 6].map(n => (
+                <div key={n} className="h-[320px] animate-pulse rounded-xl border border-border bg-[#15171f]" />
+              ))}
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>
+                  Mostrando resultados de GitHub ({discoverTotal.toLocaleString()} encontrados)
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={discoverPage <= 1 || isDiscoverLoading}
+                    onClick={() => loadDiscoverRepos(discoverPage - 1)}
+                  >
+                    <ChevronLeft className="size-3.5" /> Anterior
+                  </Button>
+                  <span>Página {discoverPage}</span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={!discoverHasMore || isDiscoverLoading}
+                    onClick={() => loadDiscoverRepos(discoverPage + 1)}
+                  >
+                    Siguiente <ChevronRight className="size-3.5" />
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+                {discoverItems.map(repo => {
+                  const key = repo.fullName.toLowerCase()
+                  const alreadySaved = existingFullNamesSet.has(key)
+                  const isSaving = savingDiscoverKey === key
+
+                  return (
+                    <div
+                      key={repo.fullName}
+                      className="flex flex-col overflow-hidden rounded-xl border border-border bg-[#15171f] transition-all hover:border-[#4b4675]"
+                    >
+                      <div className="relative h-[150px] w-full overflow-hidden bg-[#0e1016] border-b border-border/60">
+                        <img
+                          src={repo.imageUrl}
+                          alt={repo.fullName}
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#15171f] via-transparent to-transparent" />
+                        <div className="absolute bottom-2.5 left-3 right-3 flex items-center justify-between">
+                          <span
+                            className={`rounded-md border px-2 py-0.5 text-[10px] font-medium ${getResourceTypeStyle(
+                              repo.resourceType
+                            )}`}
+                          >
+                            {repo.resourceType || 'Repositorio'}
+                          </span>
+                          {repo.primaryLanguage && (
+                            <span className="rounded-md bg-black/75 px-2 py-0.5 text-[10px] text-zinc-200">
+                              {repo.primaryLanguage}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-1 flex-col p-4">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="text-[11px] text-muted-foreground">{repo.owner} /</p>
+                            <h3 className="truncate text-sm font-semibold text-foreground">{repo.name}</h3>
+                          </div>
+                          <span className="flex items-center gap-1 text-xs font-medium text-amber-300 shrink-0">
+                            <Star className="size-3.5 fill-amber-400 text-amber-400" />
+                            {formatNum(repo.stars)}
+                          </span>
+                        </div>
+
+                        <p className="mt-2.5 line-clamp-3 text-xs text-zinc-300">
+                          {repo.shortExplanationEs || repo.description}
+                        </p>
+
+                        <div className="mt-auto pt-4 flex items-center justify-between gap-2">
+                          <a
+                            href={repo.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            Ver en GitHub <ExternalLink className="size-3" />
+                          </a>
+
+                          {alreadySaved ? (
+                            <Badge className="bg-emerald-950/60 text-emerald-300 border-emerald-700/40 gap-1">
+                              <Check className="size-3" /> En tu Galería
+                            </Badge>
+                          ) : (
+                            <Button
+                              size="xs"
+                              disabled={isSaving}
+                              onClick={() => handleSaveDiscoverRepo(repo)}
+                              className="bg-[#7c6cf0] text-white hover:bg-[#6b5bd6] gap-1"
+                            >
+                              {isSaving ? (
+                                <Loader2 className="size-3 animate-spin" />
+                              ) : (
+                                <Plus className="size-3" />
+                              )}
+                              Guardar en Atlas
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* BARRA FLOTANTE DE SELECCIÓN MÚLTIPLE                                 */}
+      {/* ===================================================================== */}
+      {selectedRepoKeys.size > 0 && (
+        <div className="fixed bottom-5 left-1/2 z-40 -translate-x-1/2 flex flex-wrap items-center gap-2 rounded-2xl border border-[#4c4578] bg-[#171625]/95 px-4 py-2.5 shadow-2xl backdrop-blur-md">
+          <Badge className="bg-[#7c6cf0] text-white">
+            {selectedRepoKeys.size} seleccionado{selectedRepoKeys.size === 1 ? '' : 's'}
+          </Badge>
+
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() =>
+              setSelectedRepoKeys(new Set(filteredRepositories.map(r => r.fullName.toLowerCase())))
+            }
+            className="text-xs text-zinc-300"
+          >
+            Seleccionar visibles ({filteredRepositories.length})
+          </Button>
+
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => handleCopySelected('urls')}
+            className="border-border bg-[#211f33] text-xs gap-1"
+          >
+            {copiedType === 'urls' ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
+            Copiar URLs
+          </Button>
+
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => handleCopySelected('markdown')}
+            className="border-border bg-[#211f33] text-xs gap-1"
+          >
+            {copiedType === 'markdown' ? (
+              <Check className="size-3 text-emerald-400" />
+            ) : (
+              <FileText className="size-3" />
+            )}
+            Copiar Markdown
+          </Button>
+
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={isBatchEnriching}
+            onClick={() => handleEnrichReposWithGitHubApi(Array.from(selectedRepoKeys))}
+            className="border-emerald-700/50 bg-emerald-950/30 text-emerald-300 text-xs gap-1"
+          >
+            <RefreshCw className={`size-3 ${isBatchEnriching ? 'animate-spin' : ''}`} />
+            Enriquecer de GitHub API
+          </Button>
+
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => handleExportGalleryJson(true)}
+            className="border-border bg-[#211f33] text-xs gap-1"
+          >
+            <Download className="size-3" /> Exportar JSON
+          </Button>
+
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={handleDeleteSelectedRepos}
+            className="text-xs text-red-400 hover:bg-red-950/30"
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
+
+          <button
+            onClick={() => setSelectedRepoKeys(new Set())}
+            className="ml-1 rounded-full p-1 text-muted-foreground hover:text-white"
+            title="Deseleccionar todos"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL DE FICHA TÉCNICA + GUARDADOS VINCULADOS + ASISTENTE IA POR REPO*/}
+      {/* ===================================================================== */}
+      {detailRepo && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm overflow-y-auto"
+          onClick={() => setDetailRepo(null)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="relative my-8 flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-border bg-[#14161f] shadow-2xl"
+          >
+            {/* Cabecera con Banner */}
+            <div className="relative h-44 w-full shrink-0 overflow-hidden bg-[#0c0e14] border-b border-border">
+              <img
+                src={
+                  detailRepo.imageUrl ||
+                  `https://opengraph.githubassets.com/1/${detailRepo.owner}/${detailRepo.name}`
+                }
+                alt={detailRepo.fullName}
+                className="h-full w-full object-cover opacity-80"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-[#14161f] via-[#14161f]/50 to-transparent" />
+
+              <button
+                onClick={() => setDetailRepo(null)}
+                className="absolute right-4 top-4 rounded-full bg-black/60 p-2 text-zinc-200 hover:bg-black hover:text-white"
+              >
+                <X className="size-4" />
+              </button>
+
+              <div className="absolute bottom-4 left-6 right-6 flex flex-wrap items-end justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <img
+                    src={detailRepo.avatarUrl || `https://github.com/${detailRepo.owner}.png?size=128`}
+                    alt={detailRepo.owner}
+                    className="size-12 rounded-xl border border-white/20 bg-[#0e1016] object-cover shadow-md"
+                  />
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-300">{detailRepo.owner} /</span>
+                      <span
+                        className={`rounded-md border px-2 py-0.5 text-[10px] font-medium ${getResourceTypeStyle(
+                          detailRepo.resourceType
+                        )}`}
+                      >
+                        {detailRepo.resourceType || 'Repositorio'}
+                      </span>
+                    </div>
+                    <h2 className="font-serif text-2xl font-semibold text-white">{detailRepo.name}</h2>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={isRefreshingRepo}
+                    onClick={handleRefreshDetailRepo}
+                    className="border-white/20 bg-black/60 text-xs text-white hover:bg-black/80 gap-1.5"
+                  >
+                    <RefreshCw className={`size-3.5 ${isRefreshingRepo ? 'animate-spin' : ''}`} />
+                    Actualizar de GitHub API
+                  </Button>
+                  {detailRepo.homepage && (
+                    <a
+                      href={detailRepo.homepage}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 rounded-md border border-white/20 bg-black/60 px-3 py-1.5 text-xs font-medium text-white hover:bg-black/80"
+                    >
+                      <Globe className="size-3.5" /> Web / Demo
+                    </a>
+                  )}
+                  <a
+                    href={detailRepo.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[#7c6cf0] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#6a5ad8]"
+                  >
+                    <Github className="size-3.5" /> Abrir en GitHub <ExternalLink className="size-3" />
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            {/* Contenido scrollable del modal */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              {/* Métricas rápidas */}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="rounded-xl border border-border bg-[#191b26] p-3">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Star className="size-3.5 text-amber-400" /> Estrellas
+                  </div>
+                  <p className="mt-1 text-lg font-semibold text-foreground">
+                    {detailRepo.stars > 0 ? detailRepo.stars.toLocaleString() : 'Pendiente API'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border bg-[#191b26] p-3">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <GitFork className="size-3.5 text-cyan-400" /> Forks / Issues
+                  </div>
+                  <p className="mt-1 text-lg font-semibold text-foreground">
+                    {detailRepo.forks.toLocaleString()} · {detailRepo.openIssues} issues
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border bg-[#191b26] p-3">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Scale className="size-3.5 text-purple-400" /> Licencia / Versión
+                  </div>
+                  <p className="mt-1 text-sm font-semibold text-foreground truncate">
+                    {detailRepo.license || 'Open Source'}{' '}
+                    {detailRepo.latestRelease?.tag ? `· ${detailRepo.latestRelease.tag}` : ''}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border bg-[#191b26] p-3">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Calendar className="size-3.5 text-emerald-400" /> Lanzamiento / Push
+                  </div>
+                  <p className="mt-1 text-xs font-medium text-foreground">
+                    {formatShortDate(detailRepo.createdAt)} · Act: {formatShortDate(detailRepo.pushedAt)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Barra de Lenguajes estilo GitHub */}
+              {detailRepo.languages && detailRepo.languages.length > 0 && (
+                <div className="space-y-2 rounded-xl border border-border bg-[#191b26] p-4">
+                  <p className="text-xs font-medium text-foreground">Composición de Lenguajes</p>
+                  <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-[#0f1117]">
+                    {detailRepo.languages.map(lang => (
+                      <div
+                        key={lang.name}
+                        style={{
+                          width: `${Math.max(lang.percentage, 2)}%`,
+                          backgroundColor: getLanguageColor(lang.name)
+                        }}
+                        title={`${lang.name}: ${lang.percentage}%`}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-3 pt-1">
+                    {detailRepo.languages.map(lang => (
+                      <span key={lang.name} className="flex items-center gap-1.5 text-[11px] text-zinc-300">
+                        <span
+                          className="size-2 rounded-full"
+                          style={{ backgroundColor: getLanguageColor(lang.name) }}
+                        />
+                        <span>{lang.name}</span>
+                        <span className="text-muted-foreground">{lang.percentage}%</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Explicación Técnica en Español + Clasificación editable */}
+              <div className="rounded-xl border border-[#38335c] bg-[#1b192c] p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="size-4 text-[#a59cf5]" />
+                    <h3 className="text-sm font-semibold text-white">
+                      Qué es y para qué sirve (Análisis en Español)
+                    </h3>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={detailRepo.resourceType || 'Otro / pendiente de clasificar'}
+                      onChange={e =>
+                        handleUpdateRepoFields({ resourceType: e.target.value as ResourceType })
+                      }
+                      className="rounded-md border border-[#4a4475] bg-[#141221] px-2.5 py-1 text-xs text-[#dfdcfb]"
+                    >
+                      {RESOURCE_TYPE_OPTIONS.map(rt => (
+                        <option key={rt} value={rt}>
+                          {rt}
+                        </option>
+                      ))}
+                    </select>
+
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={isRegeneratingAi}
+                      onClick={handleRegenerateRepoAi}
+                      className="border-[#524b82] bg-[#26233d] text-xs text-[#dfdcfb] hover:bg-[#322e50] gap-1"
+                    >
+                      <Sparkles className={`size-3 ${isRegeneratingAi ? 'animate-spin' : ''}`} />
+                      {isRegeneratingAi ? 'Analizando README...' : 'Regenerar con IA'}
+                    </Button>
+                  </div>
+                </div>
+
+                <p className="text-xs font-medium text-[#d6d1ff]">
+                  {detailRepo.shortExplanationEs || detailRepo.explanation}
+                </p>
+
+                {detailRepo.longExplanationEs && (
+                  <div className="space-y-2 border-t border-[#322e52] pt-3 text-xs leading-relaxed text-zinc-200 whitespace-pre-line">
+                    {detailRepo.longExplanationEs}
+                  </div>
+                )}
+              </div>
+
+              {/* Publicaciones Guardadas Vinculadas (Conexión directa con tu Biblioteca X / IG / WA) */}
+              {(() => {
+                const linkedPosts = getLinkedBookmarksForRepo(detailRepo)
+                return (
+                  <div className="rounded-xl border border-border bg-[#191b26] p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                        <Bookmark className="size-3.5 text-[#a59cf5]" />
+                        Publicaciones Guardadas que mencionan este repositorio ({linkedPosts.length})
+                      </h3>
+                    </div>
+
+                    {linkedPosts.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Este repositorio fue agregado directamente a la galería.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {linkedPosts.map(bm => (
+                          <div
+                            key={bm.id}
+                            className="flex flex-col justify-between gap-2 rounded-lg border border-border bg-[#12141c] p-3 sm:flex-row sm:items-center"
+                          >
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex items-center gap-2">
+                                <Badge variant="outline" className="text-[10px] uppercase">
+                                  {bm.platform}
+                                </Badge>
+                                <span className="text-xs font-medium text-foreground">
+                                  {bm.authorName} ({bm.authorHandle})
+                                </span>
+                                <span className="text-[11px] text-muted-foreground">
+                                  {formatShortDate(bm.savedAt || bm.publishedAt)}
+                                </span>
+                              </div>
+                              <p className="line-clamp-2 text-xs text-zinc-300">
+                                {bm.caption || bm.purpose || bm.title}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => {
+                                  setDetailRepo(null)
+                                  onOpenBookmarkDetail(bm)
+                                }}
+                                className="text-xs border-[#453f6e] text-[#c5bfff]"
+                              >
+                                Abrir ficha del guardado
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* Notas personales del repositorio */}
+              <div className="rounded-xl border border-border bg-[#191b26] p-4 space-y-2">
+                <label className="text-xs font-medium text-foreground">
+                  Notas personales / En qué proyecto usarlo
+                </label>
+                <textarea
+                  rows={2}
+                  value={detailRepo.notes || ''}
+                  onChange={e => setDetailRepo({ ...detailRepo, notes: e.target.value })}
+                  onBlur={e => handleUpdateRepoFields({ notes: e.target.value })}
+                  placeholder="Anotá para qué proyecto te sirve, comandos clave o ideas de integración..."
+                  className="w-full rounded-lg border border-border bg-[#101218] p-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
+                />
+              </div>
+
+              {/* Asistente IA del Repositorio */}
+              <div className="rounded-xl border border-border bg-[#191b26] p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-foreground flex items-center gap-1.5">
+                    <MessageSquare className="size-3.5 text-[#a59cf5]" />
+                    Preguntale al Asistente sobre {detailRepo.fullName}
+                  </h3>
+                </div>
+
+                {/* Preguntas rápidas sugeridas */}
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    '¿Qué hace exactamente y qué problema resuelve?',
+                    '¿Cómo se instala o prueba rápidamente?',
+                    '¿Cuáles son sus mejores casos de uso?',
+                    '¿Qué requisitos técnicos o dependencias tiene?'
+                  ].map(q => (
+                    <button
+                      key={q}
+                      onClick={() => handleAskRepoChat(q)}
+                      className="rounded-lg border border-border bg-[#11131b] px-2.5 py-1 text-[11px] text-zinc-300 hover:border-[#7c6cf0] hover:text-white"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+
+                {repoChatHistory.length > 0 && (
+                  <div className="max-h-60 overflow-y-auto space-y-2.5 rounded-lg border border-border bg-[#101218] p-3">
+                    {repoChatHistory.map((msg, i) => (
+                      <div
+                        key={i}
+                        className={`rounded-lg p-2.5 text-xs leading-relaxed whitespace-pre-line ${
+                          msg.role === 'user'
+                            ? 'ml-8 bg-[#28263b] text-white'
+                            : 'mr-4 border border-border bg-[#161822] text-zinc-200'
+                        }`}
+                      >
+                        {msg.content}
+                      </div>
+                    ))}
+                    {isRepoChatLoading && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Loader2 className="size-3.5 animate-spin" /> Analizando repositorio...
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <form
+                  onSubmit={e => {
+                    e.preventDefault()
+                    handleAskRepoChat()
+                  }}
+                  className="flex gap-2"
+                >
+                  <input
+                    type="text"
+                    value={repoChatInput}
+                    onChange={e => setRepoChatInput(e.target.value)}
+                    placeholder={`Preguntá cualquier duda técnica sobre ${detailRepo.name}...`}
+                    className="flex-1 rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={isRepoChatLoading || !repoChatInput.trim()}
+                    className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8]"
+                  >
+                    <Send className="size-3.5" />
+                  </Button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: AGREGAR REPOSITORIO POR URL                                    */}
+      {/* ===================================================================== */}
+      {isAddModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          onClick={() => setIsAddModalOpen(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="w-full max-w-lg rounded-2xl border border-border bg-[#15171f] p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-serif text-lg font-medium text-foreground">
+                Agregar Repositorio de GitHub
+              </h3>
+              <button onClick={() => setIsAddModalOpen(false)} className="text-muted-foreground hover:text-white">
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddSingleRepo} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-300">
+                  URL del repositorio o formato <code className="text-[#a59cf5]">owner/repo</code>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={addUrlInput}
+                  onChange={e => setAddUrlInput(e.target.value)}
+                  placeholder="https://github.com/anthropics/skills o anthropics/skills"
+                  className="w-full rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-zinc-300">Notas opcionales</label>
+                <input
+                  type="text"
+                  value={addNotesInput}
+                  onChange={e => setAddNotesInput(e.target.value)}
+                  placeholder="Ej: Para usar en mi agente de edición de video..."
+                  className="w-full rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                />
+              </div>
+
+              {addError && (
+                <p className="rounded-lg border border-red-500/40 bg-red-950/30 p-2.5 text-xs text-red-200">
+                  {addError}
+                </p>
+              )}
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsAddModalOpen(false)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={isAddingRepo}
+                  className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] gap-1.5"
+                >
+                  {isAddingRepo && <Loader2 className="size-3.5 animate-spin" />}
+                  {isAddingRepo ? 'Analizando con GitHub & IA...' : 'Guardar en Galería y Biblioteca'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: IMPORTACIÓN MASIVA DESDE TEXTO / NOTAS / MARKDOWN              */}
+      {/* ===================================================================== */}
+      {isBulkTextModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          onClick={() => !isBulkImporting && setIsBulkTextModalOpen(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="w-full max-w-2xl rounded-2xl border border-border bg-[#15171f] p-6 shadow-2xl space-y-4"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-serif text-lg font-medium text-foreground">
+                  Importar Repositorios desde Texto o Notas
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  Pegá cualquier mensaje de WhatsApp, hilo, README o lista Markdown: Atlas detecta automáticamente todas las URLs de GitHub.
+                </p>
+              </div>
+              <button
+                onClick={() => !isBulkImporting && setIsBulkTextModalOpen(false)}
+                className="text-muted-foreground hover:text-white"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <textarea
+              rows={5}
+              value={bulkTextInput}
+              onChange={e => setBulkTextInput(e.target.value)}
+              placeholder="Pegá acá texto libre con enlaces como https://github.com/modelcontextprotocol/servers o listas de repositorios..."
+              className="w-full rounded-lg border border-border bg-[#101218] p-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
+            />
+
+            {detectedBulkRepos.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-medium text-foreground">
+                    Repositorios detectados ({detectedBulkRepos.length})
+                  </span>
+                  <span className="text-muted-foreground">
+                    {bulkSelectedUrls.size} seleccionados para importar
+                  </span>
+                </div>
+                <div className="max-h-48 overflow-y-auto divide-y divide-border/50 rounded-lg border border-border bg-[#101218]">
+                  {detectedBulkRepos.map(item => (
+                    <label
+                      key={item.cleanUrl}
+                      className="flex items-center justify-between px-3 py-2 text-xs cursor-pointer hover:bg-[#191c26]"
+                    >
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={bulkSelectedUrls.has(item.cleanUrl)}
+                          onChange={() => {
+                            setBulkSelectedUrls(prev => {
+                              const next = new Set(prev)
+                              if (next.has(item.cleanUrl)) next.delete(item.cleanUrl)
+                              else next.add(item.cleanUrl)
+                              return next
+                            })
+                          }}
+                          className="rounded border-border"
+                        />
+                        <span className="font-medium text-foreground">{item.fullName}</span>
+                      </div>
+                      {item.alreadyInGallery ? (
+                        <Badge variant="outline" className="text-[10px] text-amber-300 border-amber-700/40">
+                          Ya en galería
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-[10px] text-emerald-300 border-emerald-700/40">
+                          Nuevo
+                        </Badge>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {bulkProgress && (
+              <div className="text-xs text-[#bfb8ff] flex items-center gap-2">
+                <Loader2 className="size-3.5 animate-spin" />
+                Importando y analizando {bulkProgress.current} de {bulkProgress.total}...
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={isBulkImporting}
+                onClick={() => setIsBulkTextModalOpen(false)}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={isBulkImporting || bulkSelectedUrls.size === 0}
+                onClick={handleRunBulkTextImport}
+                className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8]"
+              >
+                Importar {bulkSelectedUrls.size} repositorio{bulkSelectedUrls.size === 1 ? '' : 's'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: AJUSTES DE GITHUB TOKEN & PROVEEDOR DE IA                      */}
+      {/* ===================================================================== */}
+      {isSettingsOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+          onClick={() => setIsSettingsOpen(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="w-full max-w-lg rounded-2xl border border-border bg-[#15171f] p-6 shadow-2xl space-y-5"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <KeyRound className="size-4 text-[#a59cf5]" />
+                <h3 className="font-serif text-lg font-medium text-foreground">
+                  Ajustes de GitHub API & Motor de IA
+                </h3>
+              </div>
+              <button onClick={() => setIsSettingsOpen(false)} className="text-muted-foreground hover:text-white">
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-foreground">
+                GitHub Personal Access Token (Opcional)
+              </label>
+              <p className="text-[11px] text-muted-foreground">
+                Sin token tenés 60 consultas/hora. Con un token clásico o fine-grained de solo lectura pública subís a 5.000 consultas/hora.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={githubToken}
+                  onChange={e => setGithubToken(e.target.value)}
+                  placeholder="ghp_... o github_pat_..."
+                  className="flex-1 rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={isCheckingRateLimit}
+                  onClick={handleCheckRateLimit}
+                >
+                  {isCheckingRateLimit ? 'Verificando...' : 'Verificar límite'}
+                </Button>
+              </div>
+
+              {rateLimit && (
+                <div className="flex items-center justify-between rounded-lg border border-emerald-800/40 bg-emerald-950/30 px-3 py-2 text-xs text-emerald-200">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 className="size-3.5 text-emerald-400" />
+                    Cuota disponible: <strong>{rateLimit.remaining}</strong> / {rateLimit.limit} peticiones
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-foreground">
+                Proveedor de IA preferido para explicaciones y chat
+              </label>
+              <select
+                value={selectedAiProvider}
+                onChange={e => setSelectedAiProvider(e.target.value as AiProviderId)}
+                className="w-full rounded-lg border border-border bg-[#101218] px-3 py-2 text-xs text-foreground"
+              >
+                {(aiProviders.length > 0
+                  ? aiProviders
+                  : [
+                      { id: 'gemini', name: 'Google Gemini', model: 'gemini-2.5-flash', configured: true },
+                      { id: 'openai', name: 'OpenAI / Compatible', model: 'gpt-4.1-mini', configured: false },
+                      { id: 'anthropic', name: 'Anthropic Claude', model: 'claude-3-5-haiku', configured: false },
+                      { id: 'ollama', name: 'Ollama Local', model: 'llama3', configured: false },
+                      { id: 'deterministic', name: 'Analizador Local Determinista', model: 'atlas-rules-v2', configured: true }
+                    ]
+                ).map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.model}) {p.configured ? '✓ Configurado' : '· Fallback local si no hay API key'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" size="sm" onClick={() => setIsSettingsOpen(false)}>
+                Cerrar
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSaveSettings}
+                className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8]"
+              >
+                Guardar preferencias
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* ASISTENTE FLOTANTE GLOBAL DE GALERÍA                                  */}
+      {/* ===================================================================== */}
+      {isGalleryChatOpen && (
+        <div className="fixed bottom-5 right-5 z-50 flex h-[520px] w-[390px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-[#4c4578] bg-[#14161f] shadow-2xl">
+          <div className="flex items-center justify-between border-b border-border bg-[#1c1a2e] px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Bot className="size-4 text-[#a59cf5]" />
+              <div>
+                <h4 className="text-xs font-semibold text-white">Asistente de Galería GitHub</h4>
+                <p className="text-[10px] text-muted-foreground">
+                  Conoce tus {repositories.length} repositorios guardados
+                </p>
+              </div>
+            </div>
+            <button onClick={() => setIsGalleryChatOpen(false)} className="text-muted-foreground hover:text-white">
+              <X className="size-4" />
+            </button>
+          </div>
+
+          {/* Sugerencias rápidas */}
+          <div className="flex gap-1.5 overflow-x-auto border-b border-border/60 bg-[#101218] px-3 py-2">
+            {[
+              '¿Qué Skills y MCP tengo?',
+              '¿Qué repos me sirven para agentes?',
+              '¿Qué herramientas tengo de video o voz?'
+            ].map(prompt => (
+              <button
+                key={prompt}
+                onClick={() => handleAskGalleryChat(prompt)}
+                className="shrink-0 rounded-full border border-border bg-[#181a24] px-2.5 py-1 text-[10px] text-zinc-300 hover:border-[#7c6cf0] hover:text-white"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+            {galleryChatMessages.map((m, idx) => {
+              const mentionedRepos =
+                m.role === 'assistant' ? extractGitHubReposFromFreeText(m.content) : []
+              return (
+                <div
+                  key={idx}
+                  className={`rounded-xl p-3 text-xs leading-relaxed whitespace-pre-line ${
+                    m.role === 'user'
+                      ? 'ml-8 bg-[#7c6cf0] text-white'
+                      : 'mr-2 border border-border bg-[#191b26] text-zinc-200'
+                  }`}
+                >
+                  {m.content}
+                  {mentionedRepos.length > 0 && (
+                    <div className="mt-2.5 flex flex-wrap gap-1.5 border-t border-border/60 pt-2">
+                      {mentionedRepos.slice(0, 4).map(mr => {
+                        const full = `${mr.owner}/${mr.repo}`
+                        const existing = repositories.find(
+                          r => r.fullName.toLowerCase() === full.toLowerCase()
+                        )
+                        return existing ? (
+                          <button
+                            key={full}
+                            onClick={() => setDetailRepo(existing)}
+                            className="inline-flex items-center gap-1 rounded-md border border-[#4a4475] bg-[#24213a] px-2 py-0.5 text-[10px] text-[#d6d1ff] hover:bg-[#302c4d]"
+                          >
+                            <FolderGit2 className="size-2.5" /> Abrir {full}
+                          </button>
+                        ) : (
+                          <button
+                            key={full}
+                            onClick={() => {
+                              setAddUrlInput(mr.cleanUrl)
+                              setIsAddModalOpen(true)
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-700/50 bg-emerald-950/40 px-2 py-0.5 text-[10px] text-emerald-300"
+                          >
+                            <Plus className="size-2.5" /> Agregar {full}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+            {isGalleryChatLoading && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" /> Consultando tu catálogo...
+              </div>
+            )}
+          </div>
+
+          <form
+            onSubmit={e => {
+              e.preventDefault()
+              handleAskGalleryChat()
+            }}
+            className="flex gap-2 border-t border-border bg-[#101218] p-3"
+          >
+            <input
+              type="text"
+              value={galleryChatInput}
+              onChange={e => setGalleryChatInput(e.target.value)}
+              placeholder="Preguntá qué repositorios usar para tu idea..."
+              className="flex-1 rounded-lg border border-border bg-[#161822] px-3 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isGalleryChatLoading || !galleryChatInput.trim()}
+              className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8]"
+            >
+              <Send className="size-3.5" />
+            </Button>
+          </form>
+        </div>
+      )}
+    </div>
+  )
+}

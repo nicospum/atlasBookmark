@@ -72,6 +72,46 @@ export function canonicalUrl(v: unknown): { url: string; platform: SourcePlatfor
         }
       }
     }
+
+    if (host === 'github.com') {
+      const m = u.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?:\/.*)?$/)
+      if (m) {
+        const owner = m[1]
+        const repo = m[2]
+        const reserved = new Set([
+          'orgs',
+          'users',
+          'topics',
+          'trending',
+          'collections',
+          'events',
+          'marketplace',
+          'sponsors',
+          'settings',
+          'notifications',
+          'login',
+          'join',
+          'pricing',
+          'features',
+          'about',
+          'security',
+          'explore',
+          'search',
+          'pulls',
+          'issues',
+          'codespaces'
+        ])
+        if (!reserved.has(owner.toLowerCase())) {
+          const fullKey = `${owner.toLowerCase()}/${repo.toLowerCase()}`
+          return {
+            url: `https://github.com/${owner}/${repo}`,
+            platform: 'github',
+            key: fullKey,
+            id: `github:${fullKey}`
+          }
+        }
+      }
+    }
     return null
   } catch {
     return null
@@ -731,6 +771,37 @@ export function extractRows(input: unknown, filename = 'import.json', currentCol
     return input.items.filter(isObject)
   }
 
+  // 0b. Check if it's a GitHub Visual Gallery JSON export ({ repositories: [...], version: '2.0' })
+  if (Array.isArray(input.repositories)) {
+    return input.repositories.filter(isObject).map(repo => {
+      const fullName = str(repo.fullName || (repo.owner && repo.name ? `${repo.owner}/${repo.name}` : ''))
+      const owner = str(repo.owner || fullName.split('/')[0] || 'github')
+      const repoUrl = str(repo.url || (fullName ? `https://github.com/${fullName}` : ''))
+      const shortExp = str(repo.shortExplanationEs || repo.explanation || repo.description)
+      const longExp = str(repo.longExplanationEs || repo.explanation || repo.description)
+      return {
+        id: fullName ? `github:${fullName.toLowerCase()}` : undefined,
+        platform: 'github',
+        sourceUrl: repoUrl,
+        url: repoUrl,
+        title: fullName,
+        purpose: shortExp,
+        caption: [fullName, str(repo.description), longExp].filter(Boolean).join('\n\n'),
+        authorName: owner,
+        authorHandle: `@${owner}`,
+        authorAvatar: str(repo.avatarUrl || `https://github.com/${owner}.png?size=128`),
+        domain: 'github.com',
+        publishedAt: str(repo.createdAt || ''),
+        savedAt: str(repo.addedAt || repo.updatedAt || ''),
+        topics: Array.isArray(repo.topics) ? repo.topics : [],
+        outgoingLinks: [repoUrl, str(repo.homepage)].filter(Boolean),
+        mediaUrls: str(repo.imageUrl) ? [str(repo.imageUrl)] : [],
+        captureSource: 'github_visual_gallery',
+        provenance: filename
+      }
+    })
+  }
+
   // 1. Check if it's a HAR file
   if (isObject(input.log) && Array.isArray(input.log.entries)) {
     return extractFromHar(input, filename)
@@ -864,10 +935,15 @@ export function normalizeRow(row: Row, provenance = 'manual'): BookmarkItem | nu
     rawPlatform.includes('whatsapp') ||
     rawRecordId.startsWith('whatsapp:') ||
     rawUrl.startsWith('whatsapp://')
+  const isGitHubRow =
+    rawPlatform.includes('github') ||
+    rawRecordId.startsWith('github:') ||
+    canonical?.platform === 'github'
 
   if (
     !canonical &&
     !isWhatsAppRow &&
+    !isGitHubRow &&
     !rawRecordId.startsWith('x:') &&
     !rawRecordId.startsWith('instagram:') &&
     !safeUrl(rawUrl)
@@ -877,6 +953,8 @@ export function normalizeRow(row: Row, provenance = 'manual'): BookmarkItem | nu
 
   const platform: SourcePlatform = isWhatsAppRow
     ? 'whatsapp'
+    : isGitHubRow
+    ? 'github'
     : canonical
     ? canonical.platform
     : rawRecordId.startsWith('instagram:') || rawPlatform.includes('instagram')
@@ -888,7 +966,10 @@ export function normalizeRow(row: Row, provenance = 'manual'): BookmarkItem | nu
   ).slice(0, 100000)
 
   const id =
-    rawRecordId.startsWith('x:') || rawRecordId.startsWith('instagram:') || rawRecordId.startsWith('whatsapp:')
+    rawRecordId.startsWith('x:') ||
+    rawRecordId.startsWith('instagram:') ||
+    rawRecordId.startsWith('whatsapp:') ||
+    rawRecordId.startsWith('github:')
       ? rawRecordId
       : canonical
       ? canonical.id

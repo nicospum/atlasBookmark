@@ -48,6 +48,7 @@ interface DetailSheetProps {
   onDelete?: (id: string) => void
   onAnalyze?: (id: string) => Promise<string | undefined>
   onRefresh?: () => Promise<void>
+  onOpenRepoInGallery?: (repoFullName: string) => void
 }
 
 export function DetailSheet({
@@ -59,7 +60,8 @@ export function DetailSheet({
   onRemoveTopic,
   onDelete,
   onAnalyze,
-  onRefresh
+  onRefresh,
+  onOpenRepoInGallery
 }: DetailSheetProps) {
   const [copied, setCopied] = useState(false)
   const [newTopicInput, setNewTopicInput] = useState('')
@@ -459,14 +461,25 @@ export function DetailSheet({
                       </p>
                     )}
 
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-muted-foreground">
-                      <span>Tipo: {res.resourceType}</span>
-                      {res.stars !== undefined && <span className="text-[#f0c982]">★ {res.stars}</span>}
-                      {res.license && <span>Licencia: {res.license}</span>}
-                      {res.provenanceChain && res.provenanceChain.length > 1 && (
-                        <span className="truncate font-mono text-[9px] opacity-75">
-                          Vía: {res.provenanceChain.join(' → ')}
-                        </span>
+                    <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span>Tipo: {res.resourceType}</span>
+                        {res.stars !== undefined && <span className="text-[#f0c982]">★ {res.stars}</span>}
+                        {res.license && <span>Licencia: {res.license}</span>}
+                        {res.provenanceChain && res.provenanceChain.length > 1 && (
+                          <span className="truncate font-mono text-[9px] opacity-75">
+                            Vía: {res.provenanceChain.join(' → ')}
+                          </span>
+                        )}
+                      </div>
+                      {res.kind === 'github_repo' && res.fullName && onOpenRepoInGallery && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenRepoInGallery(res.fullName!)}
+                          className="inline-flex items-center gap-1 rounded border border-[#4a4475] bg-[#24213a] px-2 py-0.5 text-[10px] font-medium text-[#d6d1ff] hover:bg-[#312d4e]"
+                        >
+                          <Github className="size-2.5" /> Abrir en Galería de Repos
+                        </button>
                       )}
                     </div>
                   </div>

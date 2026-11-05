@@ -3,7 +3,7 @@
 import React, { useState } from 'react'
 import {
   Bookmark, Hash, Image as ImageIcon, Camera, X as XIcon,
-  RefreshCw, ArrowUpRight, Plus, Sparkles
+  RefreshCw, ArrowUpRight, Plus, Sparkles, FolderGit2
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -111,7 +111,14 @@ export function OverviewView({
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            className="border-[#463f73] bg-[#211e35] text-xs text-[#cfcaff] hover:bg-[#2b2745]"
+            onClick={() => onNavigate('Repositorios')}
+          >
+            <FolderGit2 className="size-3.5 mr-1.5 text-[#a59cf5]" /> Galería de Repos GitHub
+          </Button>
           <Button
             variant="outline"
             className="border-border text-xs"

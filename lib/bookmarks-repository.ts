@@ -9,11 +9,18 @@ import {
   ftsAvailable,
   upsertCachedResource,
   getCachedResource,
-  getStorageDiagnostics
+  getStorageDiagnostics,
+  getAllGalleryRepositories,
+  getGalleryRepositoryByFullName,
+  upsertGalleryRepository,
+  deleteGalleryRepository,
+  saveGalleryCustomOrder,
+  syncBookmarksToGitHubGallery
 } from './db'
 import {
   AnalysisState,
   BookmarkItem,
+  GalleryRepository,
   ImportHistoryEntry,
   ImportResult,
   ImportStageMetrics,
@@ -27,6 +34,7 @@ import {
   synthesizeBookmarkFields,
   buildLinkedResourcesFromUrls
 } from './resource-investigator'
+import { galleryRepoToBookmarkItem } from './github-gallery'
 
 export interface QueryFilters {
   search?: string
@@ -48,12 +56,20 @@ export interface QueryFilters {
 export function syncNormalizedArchiveJson() {
   try {
     rebuildFtsIndex(true)
+    syncBookmarksToGitHubGallery()
 
     const rows = db.prepare('SELECT * FROM bookmarks ORDER BY saved_at DESC, published_at DESC').all()
     const items = rows.map(parseBookmarkRow)
     const canonical = items.map(item => ({
       record_id: item.id,
-      platform: item.platform === 'instagram' ? 'Instagram' : item.platform === 'whatsapp' ? 'WhatsApp' : 'X',
+      platform:
+        item.platform === 'instagram'
+          ? 'Instagram'
+          : item.platform === 'whatsapp'
+          ? 'WhatsApp'
+          : item.platform === 'github'
+          ? 'GitHub'
+          : 'X',
       title: item.title || '',
       purpose: item.purpose || '',
       resource_type: item.resourceType || 'Otro / pendiente de clasificar',
@@ -732,10 +748,12 @@ export function getStats() {
   const totalX = items.filter(i => i.platform === 'x').length
   const totalIg = items.filter(i => i.platform === 'instagram').length
   const totalWa = items.filter(i => i.platform === 'whatsapp').length
+  const totalGithub = items.filter(i => i.platform === 'github').length
   const reviewed = items.filter(i => i.reviewed).length
   const withMedia = items.filter(i => i.mediaType !== 'none' && i.mediaUrls.length > 0).length
   const withGitHub = items.filter(
     i =>
+      i.platform === 'github' ||
       (i.resources || []).some(r => r.kind === 'github_repo') ||
       i.outgoingLinks.some(u => u.toLowerCase().includes('github.com/'))
   ).length
@@ -743,12 +761,18 @@ export function getStats() {
   const unclassified = items.filter(
     i => i.topics.length === 0 || (i.topics.length === 1 && i.topics[0] === 'Sin clasificar')
   ).length
+  let totalGalleryRepos = 0
+  try {
+    totalGalleryRepos = (db.prepare('SELECT COUNT(*) as c FROM github_repos').get() as { c: number }).c
+  } catch {}
 
   return {
     total,
     totalX,
     totalIg,
     totalWa,
+    totalGithub,
+    totalGalleryRepos,
     reviewed,
     pending: total - reviewed,
     withMedia,
@@ -757,4 +781,67 @@ export function getStats() {
     unclassified,
     storage: getStorageDiagnostics()
   }
+}
+
+/**
+ * Save a GitHub Repository into `github_repos` AND ensure it is linked to
+ * a BookmarkItem in `bookmarks` (creating or updating `github:owner/repo` if not already
+ * linked to an X/Instagram/WhatsApp bookmark), so it is immediately searchable and exportable
+ * across the entire application.
+ */
+export function saveGalleryRepoWithBookmark(
+  repo: GalleryRepository,
+  options: { createBookmarkIfUnlinked?: boolean } = { createBookmarkIfUnlinked: true }
+): GalleryRepository {
+  const fullNameKey = `${repo.owner}/${repo.name}`.toLowerCase()
+  const existingGalleryRepo = getGalleryRepositoryByFullName(fullNameKey)
+  const existingLinkedIds = Array.from(
+    new Set([...(existingGalleryRepo?.linkedBookmarkIds || []), ...(repo.linkedBookmarkIds || [])])
+  )
+
+  const ghBookmarkId = `github:${fullNameKey}`
+  const existingGhBookmark = getBookmarkById(ghBookmarkId)
+
+  if (options.createBookmarkIfUnlinked !== false && (existingLinkedIds.length === 0 || existingGhBookmark)) {
+    const bmItem = galleryRepoToBookmarkItem({
+      ...repo,
+      linkedBookmarkIds: Array.from(new Set([...existingLinkedIds, ghBookmarkId]))
+    })
+    db.prepare(UPSERT_SQL).run(bookmarkToDbParams(bmItem))
+    if (!existingLinkedIds.includes(ghBookmarkId)) {
+      existingLinkedIds.push(ghBookmarkId)
+    }
+  }
+
+  // Also update any linked bookmarks' cached resource entry so the 8-column table shows live stars/license!
+  upsertCachedResource({
+    id: `res-gh-${fullNameKey.replace(/[^a-z0-9]/g, '-')}`,
+    url: `https://github.com/${repo.owner}/${repo.name}`,
+    resolvedUrl: `https://github.com/${repo.owner}/${repo.name}`,
+    kind: 'github_repo',
+    name: repo.name,
+    fullName: `${repo.owner}/${repo.name}`,
+    description: repo.shortExplanationEs || repo.description || '',
+    stars: repo.stars,
+    license: repo.license || undefined,
+    verificationStatus: 'confirmed',
+    evidenceBasis: 'github_api'
+  })
+
+  const savedRepo = upsertGalleryRepository({
+    ...repo,
+    linkedBookmarkIds: existingLinkedIds
+  })
+
+  syncNormalizedArchiveJson()
+  return savedRepo
+}
+
+export {
+  getAllGalleryRepositories,
+  getGalleryRepositoryByFullName,
+  upsertGalleryRepository,
+  deleteGalleryRepository,
+  saveGalleryCustomOrder,
+  syncBookmarksToGitHubGallery
 }

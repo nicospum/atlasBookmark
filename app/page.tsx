@@ -10,6 +10,7 @@ import { Sidebar } from '@/components/sidebar'
 import { DetailSheet } from '@/components/detail-sheet'
 import { OverviewView } from '@/components/views/overview-view'
 import { LibraryView } from '@/components/views/library-view'
+import { ReposView } from '@/components/views/repos-view'
 import { TopicsView } from '@/components/views/topics-view'
 import { SourcesView } from '@/components/views/sources-view'
 import { ExportView } from '@/components/views/export-view'
@@ -19,6 +20,8 @@ import { BookmarkItem, ImportHistoryEntry, StorageDiagnostics } from '@/lib/type
 export default function AtlasApp() {
   const [active, setActive] = useState('Resumen')
   const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([])
+  const [reposCount, setReposCount] = useState<number>(0)
+  const [selectedRepoFullName, setSelectedRepoFullName] = useState<string | null>(null)
   const [importHistory, setImportHistory] = useState<ImportHistoryEntry[]>([])
   const [storageDiag, setStorageDiag] = useState<StorageDiagnostics | null>(null)
   const [apiError, setApiError] = useState<string | null>(null)
@@ -64,6 +67,9 @@ export default function AtlasApp() {
         }
         if (data.stats?.storage) {
           setStorageDiag(data.stats.storage)
+        }
+        if (typeof data.stats?.totalGalleryRepos === 'number') {
+          setReposCount(data.stats.totalGalleryRepos)
         }
       } else {
         setApiError(data?.error || `Error HTTP ${res.status} al consultar /api/bookmarks`)
@@ -262,6 +268,12 @@ export default function AtlasApp() {
     setActive('Biblioteca')
   }
 
+  const handleOpenRepoInGallery = (repoFullName: string) => {
+    setDetailOpen(false)
+    setSelectedRepoFullName(repoFullName)
+    setActive('Repositorios')
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-[#7c6cf0]/30 selection:text-white">
       {/* Sidebar fijo para escritorio */}
@@ -269,6 +281,7 @@ export default function AtlasApp() {
         active={active}
         setActive={setActive}
         totalCount={bookmarks.length}
+        reposCount={reposCount}
       />
 
       <main className="min-h-screen lg:pl-[248px]">
@@ -299,7 +312,7 @@ export default function AtlasApp() {
           {/* Menú desplegable Mobile */}
           {mobileMenuOpen && (
             <div className="mb-6 flex flex-col gap-1 rounded-lg border border-border bg-[#16181f] p-3 lg:hidden">
-              {['Resumen', 'Biblioteca', 'Temas', 'Fuentes', 'Exportar', 'Captura'].map(name => (
+              {['Resumen', 'Biblioteca', 'Repositorios', 'Temas', 'Fuentes', 'Exportar', 'Captura'].map(name => (
                 <button
                   key={name}
                   onClick={() => {
@@ -411,6 +424,7 @@ export default function AtlasApp() {
             <LibraryView
               items={bookmarks}
               onOpenDetail={handleOpenDetail}
+              onOpenRepoInGallery={handleOpenRepoInGallery}
               onToggleReviewed={handleToggleReviewed}
               onDelete={handleDeleteBookmark}
               onBulkUpdateReviewed={handleBulkUpdateReviewed}
@@ -422,6 +436,16 @@ export default function AtlasApp() {
                 setSelectedTopicFilter(null)
                 setSelectedAuthorFilter(null)
               }}
+            />
+          )}
+
+          {active === 'Repositorios' && (
+            <ReposView
+              bookmarks={bookmarks}
+              onOpenBookmarkDetail={handleOpenDetail}
+              onRefreshBookmarks={refreshBookmarks}
+              initialSelectedRepoFullName={selectedRepoFullName}
+              onClearInitialSelectedRepo={() => setSelectedRepoFullName(null)}
             />
           )}
 
@@ -470,6 +494,7 @@ export default function AtlasApp() {
         onDelete={handleDeleteBookmark}
         onAnalyze={handleAnalyzeBookmark}
         onRefresh={refreshBookmarks}
+        onOpenRepoInGallery={handleOpenRepoInGallery}
       />
     </div>
   )

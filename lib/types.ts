@@ -1,4 +1,4 @@
-export type SourcePlatform = 'x' | 'instagram' | 'whatsapp'
+export type SourcePlatform = 'x' | 'instagram' | 'whatsapp' | 'github'
 
 export type AnalysisMethod = 'rules' | 'gemini' | 'ollama' | 'manual' | 'investigator'
 export type ClassificationStatus = 'deterministic' | 'manual' | 'llm' | 'pending'
@@ -214,6 +214,8 @@ export interface StorageDiagnostics {
   platformEnv: 'local' | 'vercel' | 'netlify'
   dbPath: string
   writable: boolean
+  isEphemeralFallback?: boolean
+  warning?: string
   totalBookmarks: number
   totalResourcesCached: number
 }
@@ -225,4 +227,84 @@ export interface WhatsAppParsedMessage {
   text: string
   urls: string[]
   hasLinks: boolean
+}
+
+export interface GalleryRepoLanguage {
+  name: string
+  bytes: number
+  percentage?: number
+}
+
+export interface GalleryRepoRelease {
+  tag: string
+  name: string
+  publishedAt: string
+}
+
+export interface GalleryRepository {
+  id: number
+  owner: string
+  name: string
+  fullName: string
+  url: string
+  avatarUrl: string
+  description: string
+  explanation: string
+  shortExplanationEs?: string
+  longExplanationEs?: string
+  explanationGeneratedAt?: string
+  readme?: string
+  imageUrl: string | null
+  imageSource: 'readme' | 'opengraph' | 'fallback'
+  stars: number
+  forks: number
+  openIssues: number
+  primaryLanguage: string | null
+  languages: GalleryRepoLanguage[]
+  topics: string[]
+  license: string | null
+  createdAt: string
+  updatedAt: string
+  pushedAt: string
+  latestRelease: GalleryRepoRelease | null
+  addedAt: string
+  homepage?: string | null
+  defaultBranch?: string
+  resourceType?: ResourceType
+  linkedBookmarkIds?: string[]
+  notes?: string
+  customOrder?: number
+}
+
+export type ActivityFilterType = 'ALL' | 'recent' | 'month' | 'quarter' | 'inactive'
+export type CreatedAtFilterType = 'ALL' | 'week' | 'month' | 'three_months' | 'six_months' | 'year'
+export type RepoSortByType = 'custom' | 'stars' | 'bookmarks' | 'recent_added' | 'updated' | 'created' | 'name'
+export type DiscoverCategory =
+  | 'all'
+  | 'recommended'
+  | 'trending'
+  | 'new'
+  | 'ai'
+  | 'mcp_agents'
+  | 'devtools'
+  | 'cli'
+  | 'design'
+  | 'automation'
+
+export interface RateLimitInfo {
+  limit: number
+  remaining: number
+  resetTime: string
+}
+
+export type AiProviderId = 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'local_rules'
+
+export interface AiProviderInfo {
+  id: AiProviderId
+  displayName: string
+  description: string
+  configured: boolean
+  defaultModel: string
+  defaultBaseUrl?: string
+  requiresApiKey: boolean
 }

@@ -2,8 +2,8 @@
 
 import React from 'react'
 import {
-  Archive, LayoutDashboard, Library, Tags, FolderHeart,
-  CloudDownload, Zap, Settings2, CircleHelp, MoreHorizontal
+  Archive, LayoutDashboard, Library, FolderGit2, Tags, FolderHeart,
+  CloudDownload, Zap, Settings2
 } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
 
@@ -17,6 +17,7 @@ export interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { id: 'Resumen', label: 'Resumen', icon: LayoutDashboard },
   { id: 'Biblioteca', label: 'Biblioteca', icon: Library },
+  { id: 'Repositorios', label: 'Repositorios GitHub', icon: FolderGit2 },
   { id: 'Temas', label: 'Temas', icon: Tags },
   { id: 'Fuentes', label: 'Fuentes', icon: FolderHeart },
   { id: 'Exportar', label: 'Exportar', icon: CloudDownload },
@@ -27,9 +28,10 @@ interface SidebarProps {
   active: string
   setActive: (value: string) => void
   totalCount: number
+  reposCount?: number
 }
 
-export function Sidebar({ active, setActive, totalCount }: SidebarProps) {
+export function Sidebar({ active, setActive, totalCount, reposCount }: SidebarProps) {
   return (
     <aside className="fixed inset-y-0 left-0 z-20 hidden w-[248px] flex-col border-r border-border bg-[#121318] px-4 py-5 lg:flex">
       <div className="flex items-center gap-3 px-3">
@@ -66,6 +68,11 @@ export function Sidebar({ active, setActive, totalCount }: SidebarProps) {
                   {totalCount}
                 </span>
               )}
+              {item.id === 'Repositorios' && typeof reposCount === 'number' && reposCount > 0 && (
+                <span className="ml-auto rounded-full bg-[#242138] px-2 py-0.5 text-[11px] text-[#bfb8ff]">
+                  {reposCount}
+                </span>
+              )}
             </button>
           )
         })}
@@ -88,7 +95,7 @@ export function Sidebar({ active, setActive, totalCount }: SidebarProps) {
           </div>
           <div className="min-w-0">
             <p className="truncate text-xs font-medium text-foreground">Mi Archivo</p>
-            <p className="truncate text-[11px] text-muted-foreground">X + Instagram</p>
+            <p className="truncate text-[11px] text-muted-foreground">X · IG · WA · GitHub</p>
           </div>
           <div className="ml-auto size-2 rounded-full bg-[#91d0b4]" title="Base de datos activa" />
         </div>

@@ -44,6 +44,7 @@ import { CANONICAL_RESOURCE_TYPES } from '@/lib/resource-investigator'
 interface LibraryViewProps {
   items: BookmarkItem[]
   onOpenDetail: (item: BookmarkItem) => void
+  onOpenRepoInGallery?: (repoFullName: string) => void
   onToggleReviewed: (id: string) => void
   onDelete: (id: string) => void
   onBulkUpdateReviewed: (ids: string[], reviewed: boolean) => void
@@ -59,6 +60,7 @@ const PAGE_SIZE = 50
 export function LibraryView({
   items,
   onOpenDetail,
+  onOpenRepoInGallery,
   onToggleReviewed,
   onDelete,
   onBulkUpdateReviewed,
@@ -337,6 +339,16 @@ export function LibraryView({
     hasGitHubOnly
 
   const renderPlatformBadge = (item: BookmarkItem) => {
+    if (item.platform === 'github') {
+      return (
+        <Badge
+          variant="outline"
+          className="gap-1 font-normal text-[11px] border-cyan-500/40 bg-cyan-950/30 text-cyan-300"
+        >
+          <Github className="size-2.5" /> GitHub
+        </Badge>
+      )
+    }
     if (item.platform === 'whatsapp') {
       return (
         <Badge
@@ -622,6 +634,7 @@ export function LibraryView({
               <option value="x">X / Twitter</option>
               <option value="instagram">Instagram</option>
               <option value="whatsapp">WhatsApp</option>
+              <option value="github">GitHub</option>
             </select>
 
             {/* Tipo de Recurso */}
@@ -955,22 +968,33 @@ export function LibraryView({
                         <TableCell className="max-w-[230px] py-3" onClick={e => e.stopPropagation()}>
                           <div className="flex flex-col gap-1">
                             {ghRepos.slice(0, 2).map(repo => (
-                              <a
-                                key={repo.id + repo.resolvedUrl}
-                                href={repo.resolvedUrl || repo.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex w-fit max-w-full items-center gap-1 rounded border border-[#3a4252] bg-[#161b24] px-2 py-0.5 text-[11px] text-[#91d0b4] hover:border-[#91d0b4]"
-                                title={repo.description || repo.resolvedUrl}
-                              >
-                                <Github className="size-3 shrink-0" />
-                                <span className="truncate font-mono text-[10px]">
-                                  {repo.fullName || repo.name}
-                                </span>
-                                {repo.verificationStatus === 'confirmed' && (
-                                  <Check className="size-2.5 shrink-0 text-[#91d0b4]" />
+                              <div key={repo.id + repo.resolvedUrl} className="flex items-center gap-1">
+                                <a
+                                  href={repo.resolvedUrl || repo.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-flex w-fit max-w-[180px] items-center gap-1 rounded border border-[#3a4252] bg-[#161b24] px-2 py-0.5 text-[11px] text-[#91d0b4] hover:border-[#91d0b4]"
+                                  title={repo.description || repo.resolvedUrl}
+                                >
+                                  <Github className="size-3 shrink-0" />
+                                  <span className="truncate font-mono text-[10px]">
+                                    {repo.fullName || repo.name}
+                                  </span>
+                                  {repo.verificationStatus === 'confirmed' && (
+                                    <Check className="size-2.5 shrink-0 text-[#91d0b4]" />
+                                  )}
+                                </a>
+                                {onOpenRepoInGallery && repo.fullName && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenRepoInGallery(repo.fullName!)}
+                                    className="rounded border border-[#453f6e] bg-[#211f34] px-1.5 py-0.5 text-[9px] text-[#c5bfff] hover:bg-[#2c2946]"
+                                    title="Ver ficha en Galería Visual de Repositorios"
+                                  >
+                                    Galería
+                                  </button>
                                 )}
-                              </a>
+                              </div>
                             ))}
                             {ghRepos.length > 2 && (
                               <span className="text-[10px] text-[#91d0b4]/80">

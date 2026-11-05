@@ -67,7 +67,13 @@ export function formatAnalysisStateLabel(state?: BookmarkItem['analysisState']):
 
 export function formatOriginLabel(item: BookmarkItem): string {
   const plat =
-    item.platform === 'x' ? 'X' : item.platform === 'instagram' ? 'Instagram' : 'WhatsApp'
+    item.platform === 'x'
+      ? 'X'
+      : item.platform === 'instagram'
+      ? 'Instagram'
+      : item.platform === 'github'
+      ? 'GitHub'
+      : 'WhatsApp'
   if (item.sourceUrl && item.sourceUrl.startsWith('http')) {
     return `${plat} (${item.sourceUrl})`
   }
@@ -135,7 +141,13 @@ export function mapItemToRow(
     'Estado del análisis': formatAnalysisStateLabel(item.analysisState),
     'Origen': formatOriginLabel(item),
     'Fuente':
-      item.platform === 'x' ? 'X / Twitter' : item.platform === 'instagram' ? 'Instagram' : 'WhatsApp',
+      item.platform === 'x'
+        ? 'X / Twitter'
+        : item.platform === 'instagram'
+        ? 'Instagram'
+        : item.platform === 'github'
+        ? 'GitHub'
+        : 'WhatsApp',
     'ID': item.id,
     'Texto completo': item.caption || '',
     'Autor': item.authorName || '',
