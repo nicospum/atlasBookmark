@@ -269,6 +269,35 @@ export function CaptureView({
     }
   }
 
+  const handleHydrateWhatsAppAndHuntRepos = async () => {
+    setIsBusy(true)
+    setErrorMsg('')
+    setSuccessMsg('')
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'hunt-missing-repos',
+          limit: 35,
+          platform: 'all'
+        })
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'No se pudo completar la hidratación de enlaces.')
+      }
+      setSuccessMsg(
+        `🕵️ Hidratación y Cazador Profundo completado: ${data.hydratedPostsCount} enlaces de WhatsApp/X expandidos con su texto completo y ${data.discoveredReposCount} repositorios de GitHub ocultos descubiertos (${data.newGalleryReposCount} nuevos en la Galería).`
+      )
+      await onRefresh()
+    } catch (err: any) {
+      setErrorMsg(err.message)
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
   const handleUrlImport = async (e: React.FormEvent) => {
     e.preventDefault()
     const urls = urlInput
@@ -723,6 +752,34 @@ export function CaptureView({
                   <Badge variant="outline" className="border-[#2d5a43] text-[#91d0b4]">
                     Previsualizar
                   </Badge>
+                </div>
+              </div>
+
+              {/* Opción C: Hidratar enlaces de WhatsApp (x.com / t.co / webs) y Cazar Repositorios Ocultos */}
+              <div className="border-t border-border pt-4">
+                <div className="rounded-lg border border-[#3d3566] bg-[#1a1829] p-3.5 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-[#dfdcfb]">
+                      🕵️ ¿Te mandaste links sueltos de X, Instagram o herramientas por WhatsApp?
+                    </span>
+                    <Badge className="bg-[#2c2747] text-[#bfb8ff] border-0 text-[10px]">
+                      Cazador Profundo
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground leading-relaxed">
+                    Cuando te enviás a tu propio chat de WhatsApp un link suelto de X (<code>x.com/.../status/...</code>) o de una herramienta, el mensaje no trae el texto ni el repositorio. Con este botón Atlas entra a cada link, recupera el posteo completo, inspecciona hilos/páginas y extrae todos los repositorios de GitHub automáticamente sin duplicar.
+                  </p>
+                  <Button
+                    size="sm"
+                    disabled={isBusy}
+                    onClick={handleHydrateWhatsAppAndHuntRepos}
+                    className="w-full bg-[#7c6cf0] text-xs text-white hover:bg-[#6a5ad8]"
+                  >
+                    <RefreshCw className={`mr-1.5 size-3.5 ${isBusy ? 'animate-spin' : ''}`} />
+                    {isBusy
+                      ? 'Hidratando enlaces de WhatsApp y cazando repositorios...'
+                      : 'Hidratar Links de WhatsApp/X y Cazar Repositorios Ocultos'}
+                  </Button>
                 </div>
               </div>
             </CardContent>

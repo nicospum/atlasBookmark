@@ -44,6 +44,10 @@ import {
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  generateRepositoriesExcelFile,
+  downloadRepositoriesCsvFile
+} from '@/lib/excel-export'
 import type {
   ActivityFilterType,
   AiProviderId,
@@ -211,16 +215,17 @@ function getResourceTypeStyle(rt?: ResourceType): string {
   }
 }
 
-function extractGitHubReposFromFreeText(text: string): Array<{ owner: string; repo: string; cleanUrl: string }> {
+function extractGitHubReposFromFreeText(text: string): Array<{ owner: string; repo: string; cleanUrl: string; contextHint?: string }> {
   if (!text) return []
   const rx = /(?:https?:\/\/)?(?:www\.)?github\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:[^\s<>"'`)\]]*)?/gi
   const reserved = new Set([
     'about', 'pricing', 'features', 'enterprise', 'topics', 'trending', 'collections',
     'events', 'sponsors', 'readme', 'settings', 'notifications', 'new', 'organizations',
-    'orgs', 'users', 'marketplace', 'explore', 'search', 'login', 'join', 'pulls', 'issues'
+    'orgs', 'users', 'marketplace', 'explore', 'search', 'login', 'join', 'pulls', 'issues',
+    'http', 'https', 'www', 'src', 'app', 'lib', 'components', 'data', 'scripts', 'tests'
   ])
   const seen = new Set<string>()
-  const out: Array<{ owner: string; repo: string; cleanUrl: string }> = []
+  const out: Array<{ owner: string; repo: string; cleanUrl: string; contextHint?: string }> = []
   let m: RegExpExecArray | null
   while ((m = rx.exec(text)) !== null) {
     const owner = m[1].trim()
@@ -233,6 +238,37 @@ function extractGitHubReposFromFreeText(text: string): Array<{ owner: string; re
     if (!seen.has(key)) {
       seen.add(key)
       out.push({ owner, repo, cleanUrl: `https://github.com/${owner}/${repo}` })
+    }
+  }
+  // Also support shorthand `owner/repo` lines!
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#') || /github\.com\//i.test(line)) continue
+    const sm = line.match(
+      /^(?:[-*•\d.)\s`[\]]*)?([a-zA-Z][a-zA-Z0-9_-]{1,38})\/([a-zA-Z0-9_.-]{2,80})(?:\s*[-:–—|]\s*(.*))?$/
+    )
+    if (!sm) continue
+    const owner = sm[1].trim()
+    let repo = sm[2].trim().replace(/[.,;:!?)\],'`">]+$/, '')
+    if (repo.endsWith('.git')) repo = repo.slice(0, -4)
+    if (
+      !owner ||
+      !repo ||
+      reserved.has(owner.toLowerCase()) ||
+      reserved.has(repo.toLowerCase()) ||
+      /\.(?:ts|tsx|js|jsx|json|md|py|css|html|yml|yaml|sh|txt|csv)$/i.test(repo)
+    ) {
+      continue
+    }
+    const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      out.push({
+        owner,
+        repo,
+        cleanUrl: `https://github.com/${owner}/${repo}`,
+        contextHint: sm[3]?.trim() || undefined
+      })
     }
   }
   return out
@@ -380,9 +416,13 @@ export function ReposView({
 
   const [isBulkTextModalOpen, setIsBulkTextModalOpen] = useState(false)
   const [bulkTextInput, setBulkTextInput] = useState('')
+  const [bulkPageUrlInput, setBulkPageUrlInput] = useState('')
+  const [isPreviewingPageUrl, setIsPreviewingPageUrl] = useState(false)
   const [bulkSelectedUrls, setBulkSelectedUrls] = useState<Set<string>>(new Set())
   const [isBulkImporting, setIsBulkImporting] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null)
+  const [isHuntingMissingRepos, setIsHuntingMissingRepos] = useState(false)
+  const listFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const [isStarsModalOpen, setIsStarsModalOpen] = useState(false)
   const [starsUsernameInput, setStarsUsernameInput] = useState('')
@@ -1304,7 +1344,7 @@ export function ReposView({
     }
   }
 
-  // Bulk text import detection
+  // Bulk text & Awesome-List import detection
   const detectedBulkRepos = useMemo(() => {
     const extracted = extractGitHubReposFromFreeText(bulkTextInput)
     const existingSet = new Set(repositories.map(r => r.fullName.toLowerCase()))
@@ -1320,39 +1360,153 @@ export function ReposView({
     setBulkSelectedUrls(new Set(newOnes))
   }, [detectedBulkRepos])
 
+  const handleExtractFromPageUrl = async () => {
+    if (!bulkPageUrlInput.trim()) return
+    setIsPreviewingPageUrl(true)
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'preview-list-import',
+          pageUrl: bulkPageUrlInput.trim(),
+          token: githubToken.trim() || undefined
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success && Array.isArray(data.items)) {
+        const lines = data.items.map((it: any) =>
+          it.contextHint ? `${it.cleanUrl} - ${it.contextHint}` : it.cleanUrl
+        )
+        setBulkTextInput(prev => [prev.trim(), ...lines].filter(Boolean).join('\n'))
+        setStatusBanner({
+          type: 'ok',
+          text: `Extraídos ${data.totalDetected} repositorios desde ${data.sourceLabel} (${data.newCount} nuevos, ${data.duplicateCount} ya estaban en tu catálogo).`
+        })
+      }
+    } catch {} finally {
+      setIsPreviewingPageUrl(false)
+    }
+  }
+
+  const handleLoadListFileIntoModal = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      setBulkTextInput(prev => [prev.trim(), text.trim()].filter(Boolean).join('\n'))
+    } catch {} finally {
+      if (listFileInputRef.current) listFileInputRef.current.value = ''
+    }
+  }
+
   const handleRunBulkTextImport = async () => {
     const urls = Array.from(bulkSelectedUrls)
-    if (urls.length === 0) return
+    if (urls.length === 0 && !bulkPageUrlInput.trim()) return
     setIsBulkImporting(true)
-    setBulkProgress({ current: 0, total: urls.length })
+    setBulkProgress({ current: 1, total: Math.max(1, urls.length) })
 
-    let added = 0
-    for (let i = 0; i < urls.length; i++) {
-      setBulkProgress({ current: i + 1, total: urls.length })
-      try {
-        const res = await fetch('/api/github/repos', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'add-url',
-            url: urls[i],
-            token: githubToken.trim() || undefined,
-            provider: selectedAiProvider
-          })
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'import-repo-list',
+          text: urls.length > 0 ? urls.join('\n') : bulkTextInput,
+          pageUrl: urls.length === 0 ? bulkPageUrlInput.trim() : undefined,
+          enrichLiveCount: Math.min(10, urls.length || 8),
+          token: githubToken.trim() || undefined
         })
-        if (res.ok) added++
-      } catch {}
+      })
+      const data = await res.json()
+      await fetchRepositories()
+      await onRefreshBookmarks()
+      setIsBulkTextModalOpen(false)
+      setBulkTextInput('')
+      setBulkPageUrlInput('')
+      if (res.ok && data.success) {
+        setStatusBanner({
+          type: 'ok',
+          text: `✅ Super-Importador completado: ${data.added} nuevos repositorios incorporados y ${data.duplicatesSkipped} duplicados omitidos automáticamente (${data.total} total en catálogo).`
+        })
+      }
+    } catch {
+      setStatusBanner({
+        type: 'error',
+        text: 'Ocurrió un error al importar la lista de repositorios.'
+      })
+    } finally {
+      setIsBulkImporting(false)
+      setBulkProgress(null)
     }
+  }
 
-    await fetchRepositories()
-    await onRefreshBookmarks()
-    setIsBulkImporting(false)
-    setBulkProgress(null)
-    setIsBulkTextModalOpen(false)
-    setBulkTextInput('')
+  const handleHuntMissingRepos = async () => {
+    if (isHuntingMissingRepos) return
+    setIsHuntingMissingRepos(true)
+    setStatusBanner({
+      type: 'info',
+      text: '🕵️ Cazador Profundo activo: hidratando links de WhatsApp/X, inspeccionando hilos/páginas y buscando repositorios mencionados en videos/posts...'
+    })
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'hunt-missing-repos',
+          limit: 25,
+          token: githubToken.trim() || undefined
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success) {
+        await fetchRepositories()
+        await onRefreshBookmarks()
+        setStatusBanner({
+          type: 'ok',
+          text: `🕵️ Cazador Profundo completado: se escanearon ${data.scannedCount} guardados sin repo directo, se hidrataron ${data.hydratedPostsCount} posts de WhatsApp/X y se descubrieron ${data.discoveredReposCount} repositorios ocultos (${data.newGalleryReposCount} nuevos en Galería).`
+        })
+      } else {
+        setStatusBanner({
+          type: 'error',
+          text: data.error || 'No se pudo completar el rastreo profundo.'
+        })
+      }
+    } catch {
+      setStatusBanner({
+        type: 'error',
+        text: 'Error de red al ejecutar el Cazador Profundo de Repositorios.'
+      })
+    } finally {
+      setIsHuntingMissingRepos(false)
+    }
+  }
+
+  const handleExportMasterExcel = () => {
+    const targetList =
+      selectedRepoKeys.size > 0
+        ? repositories.filter(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
+        : filteredRepositories.length > 0
+        ? filteredRepositories
+        : repositories
+    const fname = generateRepositoriesExcelFile(targetList, bookmarks)
     setStatusBanner({
       type: 'ok',
-      text: `Importación desde texto completada: ${added} de ${urls.length} repositorios incorporados a tu galería.`
+      text: `📊 Excel Maestro exportado (${fname}) con ${targetList.length} repositorios y 5 pestañas clasificadas por agente (Qué es, Área, Empresa, Estrellas, Puntaje 1-10, Seguridad y Proyectos).`
+    })
+  }
+
+  const handleExportMasterCsv = () => {
+    const targetList =
+      selectedRepoKeys.size > 0
+        ? repositories.filter(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
+        : filteredRepositories.length > 0
+        ? filteredRepositories
+        : repositories
+    const fname = downloadRepositoriesCsvFile(targetList, bookmarks)
+    setStatusBanner({
+      type: 'ok',
+      text: `📄 CSV Maestro exportado (${fname}) con ${targetList.length} repositorios clasificados.`
     })
   }
 
@@ -1471,12 +1625,19 @@ export function ReposView({
 
   return (
     <div className="space-y-6 pb-20">
-      {/* Hidden JSON file input */}
+      {/* Hidden JSON & List file inputs */}
       <input
         ref={fileInputRef}
         type="file"
         accept=".json"
         onChange={handleImportGalleryJsonFile}
+        className="hidden"
+      />
+      <input
+        ref={listFileInputRef}
+        type="file"
+        accept=".txt,.md,.csv,.json,.html"
+        onChange={handleLoadListFileIntoModal}
         className="hidden"
       />
 
@@ -1495,11 +1656,19 @@ export function ReposView({
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground max-w-3xl">
-            Unifica automáticamente los repositorios descubiertos en tus guardados de X, Instagram y WhatsApp con el explorador visual de GitHub. Clasificá Skills, Servidores MCP, Agentes y Librerías, consultá su README con IA e importá/exportá en 1 clic.
+            Unifica automáticamente los repositorios descubiertos en tus guardados de X, Instagram y WhatsApp con el explorador visual de GitHub. Clasificá Skills, Servidores MCP, Agentes y Librerías, cazá repositorios ocultos en hilos/videos y exportá el Excel Maestro clasificado por Agente.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            onClick={handleExportMasterExcel}
+            className="bg-emerald-600 text-white hover:bg-emerald-500 text-xs gap-1.5 shadow-sm"
+            title="Exporta un libro Excel (.xlsx) con 5 pestañas clasificadas por Agente: Qué es, Área, Empresa, Estrellas, Puntaje 1-10, Seguridad y Proyectos"
+          >
+            <Download className="size-3.5" /> 📊 Excel Maestro (.xlsx)
+          </Button>
           <Button
             size="sm"
             onClick={() => setIsAddModalOpen(true)}
@@ -1510,19 +1679,31 @@ export function ReposView({
           <Button
             size="sm"
             variant="outline"
+            onClick={() => setIsBulkTextModalOpen(true)}
+            className="border-[#5a50a3] bg-[#231f3d] text-[#dcd7ff] hover:bg-[#2d284e] text-xs gap-1.5"
+            title="Super-Importador de listas de repositorios (URLs, owner/repo, archivos .txt/.md/.csv o páginas Awesome List) sin duplicados"
+          >
+            <FileText className="size-3.5 text-[#a59cf5]" /> Super-Importar Lista / Awesome
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isHuntingMissingRepos}
+            onClick={handleHuntMissingRepos}
+            className="border-fuchsia-600/40 bg-fuchsia-950/25 text-fuchsia-200 hover:bg-fuchsia-950/45 text-xs gap-1.5"
+            title="Hidrata links de WhatsApp/X, inspecciona hilos/comentarios y busca en GitHub API repositorios mencionados en videos o posteos"
+          >
+            <Sparkles className={`size-3.5 text-fuchsia-400 ${isHuntingMissingRepos ? 'animate-spin' : ''}`} />
+            {isHuntingMissingRepos ? 'Cazando Repos...' : '🕵️ Cazar Repos Ocultos'}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
             onClick={() => setIsStarsModalOpen(true)}
             className="border-amber-600/40 bg-amber-950/20 text-amber-200 hover:bg-amber-950/40 text-xs gap-1.5"
             title="Importar todos los repositorios con estrella (GitHub Stars) de cualquier usuario"
           >
             <Star className="size-3.5 fill-amber-400 text-amber-400" /> Importar Stars
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setIsBulkTextModalOpen(true)}
-            className="border-border bg-[#1b1d27] text-xs gap-1.5"
-          >
-            <FileText className="size-3.5 text-[#a59cf5]" /> Importar de Texto
           </Button>
           <Button
             size="sm"
@@ -1566,7 +1747,7 @@ export function ReposView({
             className="border-border bg-[#1b1d27] text-xs gap-1.5"
             title="Exportar galería en formato JSON compatible con GitHub Visual Gallery"
           >
-            <Download className="size-3.5" /> Exportar JSON
+            <Download className="size-3.5" /> JSON
           </Button>
           <Button
             size="sm"
@@ -2070,6 +2251,42 @@ export function ReposView({
                         </p>
                       </div>
 
+                      {/* Ficha rápida de Evaluación por Agente (Área, Empresa, Puntaje y Seguridad) */}
+                      {repo.agentEvaluation && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                          <span
+                            className="rounded-md border border-emerald-500/40 bg-emerald-950/40 px-1.5 py-0.5 font-semibold text-emerald-300"
+                            title={repo.agentEvaluation.atlasScoreLabel}
+                          >
+                            ★ Puntaje {repo.agentEvaluation.atlasScore.toFixed(1)}/10
+                          </span>
+                          <span
+                            className="rounded-md border border-[#3d3960] bg-[#211f33] px-1.5 py-0.5 text-[#cfcaff] truncate max-w-[165px]"
+                            title={`Área: ${repo.agentEvaluation.areaCategory}`}
+                          >
+                            {repo.agentEvaluation.areaCategory}
+                          </span>
+                          <span
+                            className="rounded-md border border-border bg-[#11131a] px-1.5 py-0.5 text-zinc-300 truncate max-w-[155px]"
+                            title={`Creador / Organización: ${repo.agentEvaluation.companyOrAuthor}`}
+                          >
+                            🏢 {repo.agentEvaluation.companyOrAuthor}
+                          </span>
+                          <span
+                            className={`rounded-md border px-1.5 py-0.5 font-medium ${
+                              repo.agentEvaluation.securityGrade === 'Alto'
+                                ? 'border-emerald-600/40 bg-emerald-950/30 text-emerald-300'
+                                : repo.agentEvaluation.securityGrade === 'Medio'
+                                ? 'border-cyan-600/40 bg-cyan-950/30 text-cyan-300'
+                                : 'border-amber-600/40 bg-amber-950/30 text-amber-300'
+                            }`}
+                            title={repo.agentEvaluation.securitySummary}
+                          >
+                            🛡️ Seg: {repo.agentEvaluation.securityGrade}
+                          </span>
+                        </div>
+                      )}
+
                       {/* Descripción original si difiere */}
                       {repo.description &&
                         repo.description !== 'Sin descripción provista.' &&
@@ -2180,9 +2397,10 @@ export function ReposView({
                       />
                     </th>
                     <th className="p-3">Repositorio</th>
-                    <th className="p-3">Tipo</th>
-                    <th className="p-3">Para qué sirve (Español)</th>
-                    <th className="p-3">Lenguaje</th>
+                    <th className="p-3">Tipo & Área</th>
+                    <th className="p-3">Empresa / Autor</th>
+                    <th className="p-3">Qué es y para qué proyecto sirve</th>
+                    <th className="p-3">Puntaje & Seguridad</th>
                     <th className="p-3">Estrellas</th>
                     <th className="p-3">Guardados</th>
                     <th className="p-3 text-right">Acciones</th>
@@ -2193,6 +2411,7 @@ export function ReposView({
                     const key = repo.fullName.toLowerCase()
                     const isSelected = selectedRepoKeys.has(key)
                     const linkedPosts = getLinkedBookmarksForRepo(repo)
+                    const ev = repo.agentEvaluation
                     return (
                       <tr
                         key={repo.fullName}
@@ -2217,32 +2436,60 @@ export function ReposView({
                               alt={repo.owner}
                               className="size-5 rounded-full"
                             />
-                            <span>{repo.fullName}</span>
+                            <div>
+                              <div>{repo.fullName}</div>
+                              {repo.primaryLanguage && (
+                                <div className="text-[10px] text-muted-foreground">{repo.primaryLanguage}</div>
+                              )}
+                            </div>
                           </div>
                         </td>
                         <td className="p-3 whitespace-nowrap">
-                          <span
-                            className={`rounded-md border px-2 py-0.5 text-[10px] font-medium ${getResourceTypeStyle(
-                              repo.resourceType
-                            )}`}
-                          >
-                            {repo.resourceType || 'Repositorio'}
-                          </span>
+                          <div className="flex flex-col gap-1">
+                            <span
+                              className={`inline-block w-fit rounded-md border px-2 py-0.5 text-[10px] font-medium ${getResourceTypeStyle(
+                                repo.resourceType
+                              )}`}
+                            >
+                              {repo.resourceType || 'Repositorio'}
+                            </span>
+                            {ev?.areaCategory && (
+                              <span className="text-[10px] text-muted-foreground">{ev.areaCategory}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <div className="text-xs text-zinc-200">{ev?.companyOrAuthor || `@${repo.owner}`}</div>
+                          <div className="text-[10px] text-muted-foreground">{ev?.creatorKind || 'Open Source'}</div>
                         </td>
                         <td className="p-3 max-w-md">
                           <p className="line-clamp-2 text-xs text-zinc-200">
                             {repo.shortExplanationEs || repo.description}
                           </p>
+                          {ev?.projectUseCases && (
+                            <p className="mt-0.5 line-clamp-1 text-[10px] text-[#b4abff]">
+                              🎯 {ev.projectUseCases}
+                            </p>
+                          )}
                         </td>
                         <td className="p-3 whitespace-nowrap">
-                          {repo.primaryLanguage ? (
-                            <span className="flex items-center gap-1.5">
+                          {ev ? (
+                            <div className="flex flex-col gap-1">
+                              <span className="text-xs font-semibold text-emerald-300">
+                                ★ {ev.atlasScore.toFixed(1)} / 10
+                              </span>
                               <span
-                                className="size-2 rounded-full"
-                                style={{ backgroundColor: getLanguageColor(repo.primaryLanguage) }}
-                              />
-                              {repo.primaryLanguage}
-                            </span>
+                                className={`inline-block w-fit rounded border px-1.5 py-0.5 text-[10px] ${
+                                  ev.securityGrade === 'Alto'
+                                    ? 'border-emerald-600/40 bg-emerald-950/30 text-emerald-300'
+                                    : ev.securityGrade === 'Medio'
+                                    ? 'border-cyan-600/40 bg-cyan-950/30 text-cyan-300'
+                                    : 'border-amber-600/40 bg-amber-950/30 text-amber-300'
+                                }`}
+                              >
+                                🛡️ {ev.securityGrade}
+                              </span>
+                            </div>
                           ) : (
                             '—'
                           )}
@@ -3062,6 +3309,67 @@ export function ReposView({
                 </div>
               </div>
 
+              {/* Dictamen Estructurado del Agente Clasificador (Puntaje, Empresa, Área, Seguridad y Proyectos) */}
+              {detailRepo.agentEvaluation && (
+                <div className="rounded-xl border border-emerald-500/30 bg-[#141d24] p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
+                      <CheckCircle2 className="size-4 text-emerald-400" />
+                      Ficha de Evaluación del Agente (Incluida en Excel Maestro)
+                    </h3>
+                    <span className="rounded-md border border-emerald-500/40 bg-emerald-950/50 px-2.5 py-0.5 text-xs font-semibold text-emerald-200">
+                      ★ Puntaje Atlas: {detailRepo.agentEvaluation.atlasScoreLabel}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3 text-xs">
+                    <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                      <span className="text-[10px] uppercase text-muted-foreground block">
+                        Área / Categoría Técnica
+                      </span>
+                      <span className="font-medium text-white mt-0.5 block">
+                        {detailRepo.agentEvaluation.areaCategory}
+                      </span>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                      <span className="text-[10px] uppercase text-muted-foreground block">
+                        Empresa / Organización / Autor
+                      </span>
+                      <span className="font-medium text-white mt-0.5 block">
+                        {detailRepo.agentEvaluation.companyOrAuthor}
+                      </span>
+                      <span className="text-[10px] text-zinc-400">
+                        {detailRepo.agentEvaluation.creatorKind}
+                      </span>
+                    </div>
+                    <div className="rounded-lg border border-white/10 bg-black/30 p-2.5">
+                      <span className="text-[10px] uppercase text-muted-foreground block">
+                        Grado de Seguridad y Licencia
+                      </span>
+                      <span className="font-medium text-emerald-300 mt-0.5 block">
+                        🛡️ {detailRepo.agentEvaluation.securitySummary}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-[#38335c] bg-[#1a182b]/80 p-3 text-xs space-y-1">
+                    <div className="font-semibold text-[#cfcaff]">
+                      🎯 ¿Para qué proyecto sirve este repositorio?
+                    </div>
+                    <p className="text-zinc-200 leading-relaxed">
+                      {detailRepo.agentEvaluation.projectUseCases}
+                    </p>
+                    <div className="flex flex-wrap gap-3 pt-1 text-[11px] text-muted-foreground">
+                      <span>Madurez: <strong className="text-zinc-200">{detailRepo.agentEvaluation.maturityLevel}</strong></span>
+                      <span>·</span>
+                      <span>Integración: <strong className="text-zinc-200">{detailRepo.agentEvaluation.integrationComplexity}</strong></span>
+                      <span>·</span>
+                      <span>Licencia: <strong className="text-zinc-200">{detailRepo.agentEvaluation.licenseSummary}</strong></span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Barra de Lenguajes estilo GitHub */}
               {detailRepo.languages && detailRepo.languages.length > 0 && (
                 <div className="space-y-2 rounded-xl border border-border bg-[#191b26] p-4">
@@ -3451,7 +3759,7 @@ export function ReposView({
       )}
 
       {/* ===================================================================== */}
-      {/* MODAL: IMPORTACIÓN MASIVA DESDE TEXTO / NOTAS / MARKDOWN              */}
+      {/* MODAL: SUPER-IMPORTADOR DE LISTAS DE REPOSITORIOS & AWESOME PAGES     */}
       {/* ===================================================================== */}
       {isBulkTextModalOpen && (
         <div
@@ -3465,10 +3773,10 @@ export function ReposView({
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-serif text-lg font-medium text-foreground">
-                  Importar Repositorios desde Texto o Notas
+                  Super-Importador de Listas de Repositorios y Páginas Awesome
                 </h3>
                 <p className="text-xs text-muted-foreground">
-                  Pegá cualquier mensaje de WhatsApp, hilo, README o lista Markdown: Atlas detecta automáticamente todas las URLs de GitHub.
+                  Cargá tus listas de repositorios desde texto, formato <code className="text-[#a59cf5]">owner/repo</code>, archivos (<code className="text-[#a59cf5]">.txt, .md, .csv</code>) o la URL de una página/Awesome List. Los duplicados se omiten automáticamente.
                 </p>
               </div>
               <button
@@ -3479,22 +3787,69 @@ export function ReposView({
               </button>
             </div>
 
+            {/* Opción A: Extraer desde una URL de Página o Awesome List */}
+            <div className="rounded-xl border border-[#322e52] bg-[#1a1829] p-3.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-[#dfdcfb] flex items-center gap-1.5">
+                  <Globe className="size-3.5 text-[#a59cf5]" />
+                  Extraer todos los repositorios de una Página Web o Awesome List de GitHub
+                </label>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() => listFileInputRef.current?.click()}
+                  className="border-border bg-[#13151e] text-[11px] gap-1"
+                >
+                  <Upload className="size-3" /> Cargar archivo (.txt / .md / .csv)
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={bulkPageUrlInput}
+                  onChange={e => setBulkPageUrlInput(e.target.value)}
+                  placeholder="Ej: https://github.com/punkpeye/awesome-mcp-servers o cualquier artículo/lista con repos..."
+                  className="flex-1 rounded-lg border border-border bg-[#101218] px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={isPreviewingPageUrl || !bulkPageUrlInput.trim()}
+                  onClick={handleExtractFromPageUrl}
+                  className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] text-xs gap-1.5 shrink-0"
+                >
+                  {isPreviewingPageUrl ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+                  {isPreviewingPageUrl ? 'Extrayendo...' : 'Extraer Lista de Página'}
+                </Button>
+              </div>
+            </div>
+
+            {/* Opción B: Pegar lista de URLs o líneas owner/repo */}
             <textarea
               rows={5}
               value={bulkTextInput}
               onChange={e => setBulkTextInput(e.target.value)}
-              placeholder="Pegá acá texto libre con enlaces como https://github.com/modelcontextprotocol/servers o listas de repositorios..."
-              className="w-full rounded-lg border border-border bg-[#101218] p-3 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
+              placeholder={`Pegá tus listas acá (soporta URLs completas o formato corto owner/repo):\nhttps://github.com/modelcontextprotocol/servers\nanthropics/skills - Skills oficiales de Claude\nbrowser-use/browser-use`}
+              className="w-full rounded-lg border border-border bg-[#101218] p-3 font-mono text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
             />
 
             {detectedBulkRepos.length > 0 && (
               <div className="space-y-2">
-                <div className="flex items-center justify-between text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <span className="font-medium text-foreground">
-                    Repositorios detectados ({detectedBulkRepos.length})
+                    Detectados: {detectedBulkRepos.length} repositorios (
+                    <span className="text-emerald-300">
+                      {detectedBulkRepos.filter(d => !d.alreadyInGallery).length} nuevos
+                    </span>{' '}
+                    ·{' '}
+                    <span className="text-amber-300">
+                      {detectedBulkRepos.filter(d => d.alreadyInGallery).length} ya en tu catálogo
+                    </span>
+                    )
                   </span>
                   <span className="text-muted-foreground">
-                    {bulkSelectedUrls.size} seleccionados para importar
+                    {bulkSelectedUrls.size} seleccionados para incorporar
                   </span>
                 </div>
                 <div className="max-h-48 overflow-y-auto divide-y divide-border/50 rounded-lg border border-border bg-[#101218]">
@@ -3503,7 +3858,7 @@ export function ReposView({
                       key={item.cleanUrl}
                       className="flex items-center justify-between px-3 py-2 text-xs cursor-pointer hover:bg-[#191c26]"
                     >
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
                         <input
                           type="checkbox"
                           checked={bulkSelectedUrls.has(item.cleanUrl)}
@@ -3517,14 +3872,19 @@ export function ReposView({
                           }}
                           className="rounded border-border"
                         />
-                        <span className="font-medium text-foreground">{item.fullName}</span>
+                        <span className="font-medium text-foreground truncate">{item.fullName}</span>
+                        {item.contextHint && (
+                          <span className="truncate text-[11px] text-muted-foreground max-w-[260px]">
+                            — {item.contextHint}
+                          </span>
+                        )}
                       </div>
                       {item.alreadyInGallery ? (
-                        <Badge variant="outline" className="text-[10px] text-amber-300 border-amber-700/40">
-                          Ya en galería
+                        <Badge variant="outline" className="text-[10px] text-amber-300 border-amber-700/40 shrink-0">
+                          Duplicado (se omite)
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="text-[10px] text-emerald-300 border-emerald-700/40">
+                        <Badge variant="outline" className="text-[10px] text-emerald-300 border-emerald-700/40 shrink-0">
                           Nuevo
                         </Badge>
                       )}
@@ -3537,7 +3897,7 @@ export function ReposView({
             {bulkProgress && (
               <div className="text-xs text-[#bfb8ff] flex items-center gap-2">
                 <Loader2 className="size-3.5 animate-spin" />
-                Importando y analizando {bulkProgress.current} de {bulkProgress.total}...
+                Incorporando lista con deduplicación estricta y clasificación por agente...
               </div>
             )}
 
@@ -3554,11 +3914,11 @@ export function ReposView({
               <Button
                 type="button"
                 size="sm"
-                disabled={isBulkImporting || bulkSelectedUrls.size === 0}
+                disabled={isBulkImporting || (bulkSelectedUrls.size === 0 && !bulkPageUrlInput.trim())}
                 onClick={handleRunBulkTextImport}
                 className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8]"
               >
-                Importar {bulkSelectedUrls.size} repositorio{bulkSelectedUrls.size === 1 ? '' : 's'}
+                Incorporar {bulkSelectedUrls.size > 0 ? `${bulkSelectedUrls.size} nuevos` : 'lista'} sin duplicados
               </Button>
             </div>
           </div>

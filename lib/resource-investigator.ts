@@ -952,7 +952,6 @@ export async function investigateResourceUrlLive(
         ...fallbackResource,
         verificationStatus: 'inaccessible',
         verifiedAt: now,
-         
         evidenceBasis: fallbackResource.evidenceBasis,
         error: err?.message || 'No accesible o tiempo de espera agotado'
       },
@@ -960,3 +959,299 @@ export async function investigateResourceUrlLive(
     }
   }
 }
+
+export interface HydratedSocialPost {
+  text: string
+  authorName?: string
+  authorHandle?: string
+  expandedUrls: string[]
+  discoveredGitHubUrls: string[]
+  mediaUrls: string[]
+}
+
+/**
+ * Hydrates a bare X/Twitter status URL (e.g. from WhatsApp self-chat or link-only bookmark)
+ * using FxTwitter / VxTwitter / Twitter oEmbed public APIs, and resolves any t.co links inside it.
+ */
+export async function hydrateXStatusUrl(rawUrl: string): Promise<HydratedSocialPost | null> {
+  const cleaned = cleanUrlString(rawUrl)
+  if (!cleaned) return null
+
+  const statusMatch = cleaned.match(
+    /^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/([A-Za-z0-9_]+)\/status\/(\d+)/i
+  )
+  if (!statusMatch) return null
+
+  const user = statusMatch[1]
+  const statusId = statusMatch[2]
+  const expandedUrls = new Set<string>()
+  const mediaUrls = new Set<string>()
+  let text = ''
+  let authorName = ''
+  let authorHandle = user !== 'i' ? `@${user}` : ''
+
+  // 1. Try api.fxtwitter.com (returns rich JSON including facets/urls, quote tweets, and media)
+  try {
+    const fxRes = await fetch(`https://api.fxtwitter.com/${user}/status/${statusId}`, {
+      headers: {
+        'User-Agent': 'AtlasBookmarkLegacy/2.0',
+        Accept: 'application/json'
+      },
+      signal: AbortSignal.timeout(6500)
+    })
+    if (fxRes.ok) {
+      const data = await fxRes.json()
+      const tw = data?.tweet
+      if (tw) {
+        text = String(tw.text || '').trim()
+        if (tw.author?.name) authorName = String(tw.author.name)
+        if (tw.author?.screen_name) authorHandle = `@${String(tw.author.screen_name).replace(/^@/, '')}`
+
+        // Extract facet URLs if present
+        const facets = Array.isArray(tw.raw_text?.facets) ? tw.raw_text.facets : []
+        for (const f of facets) {
+          const rUrl = cleanUrlString(f?.replacement || f?.original || '')
+          if (rUrl) expandedUrls.add(rUrl)
+        }
+
+        // Check quoted tweet if present
+        if (tw.quote) {
+          const qText = String(tw.quote.text || '').trim()
+          if (qText) {
+            text = text ? `${text}\n\n[Cita @${tw.quote.author?.screen_name || ''}]: ${qText}` : qText
+          }
+          const qFacets = Array.isArray(tw.quote.raw_text?.facets) ? tw.quote.raw_text.facets : []
+          for (const f of qFacets) {
+            const rUrl = cleanUrlString(f?.replacement || f?.original || '')
+            if (rUrl) expandedUrls.add(rUrl)
+          }
+        }
+
+        // Extract inline URLs from text
+        const inlineUrls = text.match(/https?:\/\/[^\s<>"')\]}]+/gi) || []
+        for (const u of inlineUrls) {
+          const cu = cleanUrlString(u)
+          if (cu) expandedUrls.add(cu)
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Fallback to api.vxtwitter.com if fxtwitter didn't return text
+  if (!text) {
+    try {
+      const vxRes = await fetch(`https://api.vxtwitter.com/${user}/status/${statusId}`, {
+        headers: {
+          'User-Agent': 'AtlasBookmarkLegacy/2.0',
+          Accept: 'application/json'
+        },
+        signal: AbortSignal.timeout(6000)
+      })
+      if (vxRes.ok) {
+        const vx = await vxRes.json()
+        if (vx?.text) {
+          text = String(vx.text).trim()
+          if (vx.user_name) authorName = String(vx.user_name)
+          if (vx.user_screen_name) authorHandle = `@${String(vx.user_screen_name).replace(/^@/, '')}`
+          if (vx.qrt?.text) {
+            text = `${text}\n\n[Cita]: ${String(vx.qrt.text).trim()}`
+          }
+          const inlineUrls = text.match(/https?:\/\/[^\s<>"')\]}]+/gi) || []
+          for (const u of inlineUrls) {
+            const cu = cleanUrlString(u)
+            if (cu) expandedUrls.add(cu)
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Fallback to publish.twitter.com/oembed
+  if (!text) {
+    try {
+      const oembedUrl = `https://publish.twitter.com/oembed?url=${encodeURIComponent(cleaned)}&omit_script=true`
+      const oeRes = await fetch(oembedUrl, { signal: AbortSignal.timeout(6000) })
+      if (oeRes.ok) {
+        const oe = await oeRes.json()
+        if (oe?.author_name) authorName = String(oe.author_name)
+        const html = String(oe?.html || '')
+        const hrefs = html.matchAll(/href=["'](https?:\/\/[^"']+)["']/gi)
+        for (const m of hrefs) {
+          const cu = cleanUrlString(m[1])
+          if (cu) expandedUrls.add(cu)
+        }
+        const plain = decodeHtml(html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim())
+        if (plain) text = plain
+      }
+    } catch {}
+  }
+
+  if (!text && expandedUrls.size === 0) return null
+
+  // Resolve any t.co or shortlinks found inside the tweet
+  const finalExpanded: string[] = []
+  for (const u of Array.from(expandedUrls).slice(0, 8)) {
+    if (isShortenerUrl(u)) {
+      const resolved = await resolveShortenedUrl(u)
+      if (resolved && !isShortenerUrl(resolved)) {
+        finalExpanded.push(resolved)
+        continue
+      }
+    }
+    if (!/^(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com)\//i.test(u)) {
+      finalExpanded.push(u)
+    }
+  }
+
+  const discoveredGitHubUrls: string[] = []
+  // Check both finalExpanded URLs and any GitHub mentions in text
+  for (const u of finalExpanded) {
+    const gh = classifyGitHubUrl(u)
+    if (gh && gh.kind === 'github_repo' && !discoveredGitHubUrls.includes(gh.canonicalUrl)) {
+      discoveredGitHubUrls.push(gh.canonicalUrl)
+    }
+  }
+
+  const textGhMatches = text.matchAll(/(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/gi)
+  for (const m of textGhMatches) {
+    const gh = classifyGitHubUrl(`https://github.com/${m[1]}`)
+    if (gh && gh.kind === 'github_repo' && !discoveredGitHubUrls.includes(gh.canonicalUrl)) {
+      discoveredGitHubUrls.push(gh.canonicalUrl)
+    }
+  }
+
+  return {
+    text,
+    authorName: authorName || undefined,
+    authorHandle: authorHandle || undefined,
+    expandedUrls: Array.from(new Set([...finalExpanded, ...discoveredGitHubUrls])),
+    discoveredGitHubUrls,
+    mediaUrls: Array.from(mediaUrls)
+  }
+}
+
+/**
+ * When a saved post (e.g. a video demo, thread hook, or "link in comments" post) talks about
+ * a tool, repository, Skill, or MCP server without including the direct GitHub URL in the first post,
+ * extracts candidate tool/repo names & CLI package names and searches GitHub API to find the repo.
+ */
+export async function searchGitHubRepoByPostContext(params: {
+  caption: string
+  title?: string
+  authorHandle?: string
+  authorName?: string
+  entities?: string[]
+  token?: string | null
+}): Promise<{
+  fullName: string
+  url: string
+  description: string
+  stars: number
+  confidence: 'confirmado' | 'probable'
+} | null> {
+  const raw = `${params.title || ''} ${params.caption || ''}`.trim()
+  if (!raw || raw.length < 12) return null
+
+  const candidates: string[] = []
+
+  // 1. Explicit CLI / package install mentions in caption (e.g. npx @scope/pkg, pip install X, uvx X, git clone ...)
+  const cliMatches = [
+    ...raw.matchAll(/(?:npx|bunx|pnpx)\s+(?:-y\s+)?([@a-zA-Z0-9_./-]{3,60})/gi),
+    ...raw.matchAll(/(?:pip|pip3|uv\s+tool|uvx|cargo|brew)\s+(?:install\s+)?([a-zA-Z0-9_.-]{3,50})/gi),
+    ...raw.matchAll(/claude\s+mcp\s+add\s+([a-zA-Z0-9_.-]{3,50})/gi)
+  ]
+  for (const m of cliMatches) {
+    const pkg = (m[1] || '').replace(/^@/, '').replace(/[.,;:!?)`"'\]>]+$/, '').trim()
+    if (pkg && pkg.length >= 3 && !['install', 'add', 'run', 'init', 'start', 'create'].includes(pkg.toLowerCase())) {
+      candidates.push(pkg)
+    }
+  }
+
+  // 2. Explicit "GitHub: X" or "repo: X" or "called X" or "llamado X" or hyphenated technical names (e.g. browser-use, open-webui, ui-ux-pro-max-skill)
+  const namedPatterns = [
+    ...raw.matchAll(/(?:repo(?:sitorio)?|github|project|proyecto|tool|herramienta|skill|mcp)\s*(?:llamado|called|named|:)\s*["'`*]?([A-Za-z0-9_.-]{3,45})["'`*]?/gi),
+    ...raw.matchAll(/\b([a-z0-9]+-(?:mcp|skill|skills|agent|agents|ui|cli|ai|llm|rag|code|use|browser|voice|tts|ocr|scraper)(?:-[a-z0-9]+)*)\b/gi),
+    ...raw.matchAll(/\b((?:mcp|open|auto|fast|deep|claude|gemini|cursor|agent|omni|voice|chat)-[a-z0-9]+(?:-[a-z0-9]+)*)\b/gi)
+  ]
+  for (const m of namedPatterns) {
+    const token = (m[1] || '').replace(/[.,;:!?)`"'\]>]+$/, '').trim()
+    if (token && token.length >= 4 && !candidates.includes(token)) {
+      candidates.push(token)
+    }
+  }
+
+  // 3. If the post clearly talks about a repo/open-source tool ("open source", "github", "repo", "stars", "mit license", "mcp", "skill")
+  const hasRepoIntent =
+    /\b(github|repo|repositorio|open[\s-]?source|c[oó]digo abierto|mit license|apache 2|estrellas|stars|mcp|skill|skills|claude code|cli|sdk|framework)\b/i.test(
+      raw
+    )
+
+  if (candidates.length === 0 && hasRepoIntent) {
+    // Look for distinctive capitalized/quoted product names or entities
+    const quoted = [...raw.matchAll(/["'“”«»`]([A-Za-z0-9][A-Za-z0-9_.-]{2,35})["'“”«»`]/g)]
+    for (const q of quoted) {
+      const w = q[1].trim()
+      if (w.length >= 3 && !/^(?:the|this|that|para|con|por|una|uno|los|las|http)$/i.test(w)) {
+        candidates.push(w)
+      }
+    }
+  }
+
+  if (candidates.length === 0) return null
+
+  const queryTerm = candidates[0]
+  const cleanHandle = (params.authorHandle || '').replace(/^@/, '').trim()
+
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github.v3+json',
+    'User-Agent': 'AtlasBookmarkDeepHunter/2.0'
+  }
+  const effectiveToken = params.token?.trim() || process.env.GITHUB_TOKEN?.trim()
+  if (effectiveToken) {
+    headers.Authorization = `Bearer ${effectiveToken}`
+  }
+
+  try {
+    const searchUrl = `https://api.github.com/search/repositories?q=${encodeURIComponent(
+      queryTerm
+    )}&sort=stars&order=desc&per_page=5`
+    const res = await fetch(searchUrl, {
+      headers,
+      signal: AbortSignal.timeout(7000)
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    const items = Array.isArray(data?.items) ? data.items : []
+    if (items.length === 0) return null
+
+    const qLower = queryTerm.toLowerCase()
+    for (const item of items) {
+      const repoName = String(item.name || '').toLowerCase()
+      const ownerLogin = String(item.owner?.login || '').toLowerCase()
+      const fullName = String(item.full_name || '')
+      const stars = Number(item.stargazers_count) || 0
+
+      const exactNameMatch =
+        repoName === qLower ||
+        `${ownerLogin}/${repoName}` === qLower ||
+        repoName.replace(/[-_]/g, '') === qLower.replace(/[-_]/g, '')
+      const handleMatch =
+        Boolean(cleanHandle) && ownerLogin === cleanHandle.toLowerCase()
+
+      if (exactNameMatch && (stars >= 15 || handleMatch)) {
+        return {
+          fullName,
+          url: `https://github.com/${fullName}`,
+          description: String(item.description || ''),
+          stars,
+          confidence: handleMatch || qLower.includes('/') ? 'confirmado' : 'probable'
+        }
+      }
+    }
+  } catch {
+    return null
+  }
+
+  return null
+}
+

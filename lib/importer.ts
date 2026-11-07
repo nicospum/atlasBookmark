@@ -442,6 +442,8 @@ export function extractFromHarWithMetrics(
   let incidentalSkipped = 0
   let orderCounter = 0
 
+  const threadRepliesByConvId = new Map<string, { urls: string[]; replySnippets: string[] }>()
+
   for (const entry of entries) {
     const reqUrl = str(entry?.request?.url)
     const method = str(entry?.request?.method || 'GET').toUpperCase()
@@ -453,18 +455,21 @@ export function extractFromHarWithMetrics(
       reqUrl.includes('/BookmarkFolderTimeline') ||
       (reqUrl.includes('/graphql/') && /bookmark/i.test(reqUrl) && !/Sidebar|Viewer|Explore/i.test(reqUrl))
 
+    // Also inspect TweetDetail thread/comment responses to rescue GitHub links posted in replies!
+    const isXTweetDetailEndpoint = reqUrl.includes('/TweetDetail')
+
     const isIgSavedEndpoint =
       reqUrl.includes('/api/v1/feed/saved/') ||
       (reqUrl.includes('instagram.com') && reqUrl.includes('graphql') && /saved/i.test(reqUrl))
 
-    if (!isXBookmarksEndpoint && !isIgSavedEndpoint) {
+    if (!isXBookmarksEndpoint && !isIgSavedEndpoint && !isXTweetDetailEndpoint) {
       continue
     }
 
     const content = entry?.response?.content
     let text = str(content?.text)
     if (!text) {
-      emptyBodyResponses++
+      if (!isXTweetDetailEndpoint) emptyBodyResponses++
       continue
     }
 
@@ -472,7 +477,7 @@ export function extractFromHarWithMetrics(
       try {
         text = Buffer.from(text, 'base64').toString('utf8')
       } catch {
-        emptyBodyResponses++
+        if (!isXTweetDetailEndpoint) emptyBodyResponses++
         continue
       }
     }
@@ -481,7 +486,42 @@ export function extractFromHarWithMetrics(
     try {
       payload = JSON.parse(text)
     } catch {
-      emptyBodyResponses++
+      if (!isXTweetDetailEndpoint) emptyBodyResponses++
+      continue
+    }
+
+    if (isXTweetDetailEndpoint) {
+      // Collect replies/comments in thread conversations to attach hidden GitHub links to bookmarked parent tweets
+      const detailInstructions =
+        payload?.data?.threaded_conversation_with_injections_v2?.instructions || []
+      const walkDetail = (node: unknown) => {
+        if (!isObject(node) && !Array.isArray(node)) return
+        if (Array.isArray(node)) {
+          for (const child of node) walkDetail(child)
+          return
+        }
+        if (isObject(node.tweet_results)) {
+          const tw = unwrapTweetResult(node.tweet_results.result)
+          const convId = str(tw?.legacy?.conversation_id_str)
+          const twId = str(tw?.rest_id || tw?.legacy?.id_str)
+          if (tw && convId && twId && convId !== twId) {
+            const extractedReply = extractTweetTextAndUrls(tw)
+            if (extractedReply.urls.length > 0 || /github\.com\//i.test(extractedReply.text)) {
+              const bucket = threadRepliesByConvId.get(convId) || { urls: [], replySnippets: [] }
+              for (const u of extractedReply.urls) {
+                if (!bucket.urls.includes(u)) bucket.urls.push(u)
+              }
+              if (extractedReply.text && bucket.replySnippets.length < 3) {
+                bucket.replySnippets.push(extractedReply.text.slice(0, 220))
+              }
+              threadRepliesByConvId.set(convId, bucket)
+            }
+          }
+          return
+        }
+        for (const child of Object.values(node)) walkDetail(child)
+      }
+      walkDetail(detailInstructions)
       continue
     }
 
@@ -537,6 +577,22 @@ export function extractFromHarWithMetrics(
             provenance: filename,
             orderIndex: orderCounter++
           })
+        }
+      }
+    }
+  }
+
+  // Attach any discovered thread/comment reply links to their parent bookmarked tweet
+  for (const [convId, replyData] of threadRepliesByConvId.entries()) {
+    const parentRow = byId.get(`x:${convId}`)
+    if (parentRow) {
+      parentRow.outgoingLinks = Array.from(
+        new Set([...(parentRow.outgoingLinks || []), ...replyData.urls])
+      )
+      if (replyData.replySnippets.length > 0 && typeof parentRow.caption === 'string') {
+        const replyBlock = `[Hilo / Comentarios]: ${replyData.replySnippets.join(' | ')}`
+        if (!parentRow.caption.includes('[Hilo / Comentarios]')) {
+          parentRow.caption = `${parentRow.caption}\n\n${replyBlock}`
         }
       }
     }
@@ -688,9 +744,16 @@ export function parseWhatsAppChatText(text: string): WhatsAppParsedMessage[] {
     const body = msg.body.trim()
     if (!body || systemIgnoreRx.test(body)) continue
 
-    // Extract URLs
+    // Extract URLs (both explicit https:// and bare github.com / x.com / instagram.com / t.co links)
     const rawUrls = body.match(/https?:\/\/[^\s<>"')\]]+/gi) || []
-    const urls = Array.from(new Set(rawUrls.map(cleanUrlString).filter(Boolean)))
+    const bareDomainMatches =
+      body.match(
+        /(?<![/:a-zA-Z0-9])(?:www\.)?(?:github\.com|x\.com|twitter\.com|instagram\.com|t\.co|youtu\.be|youtube\.com)\/[^\s<>"')\]]+/gi
+      ) || []
+    const normalizedBare = bareDomainMatches.map(u => `https://${u.replace(/^www\./i, '')}`)
+    const urls = Array.from(
+      new Set([...rawUrls, ...normalizedBare].map(cleanUrlString).filter(Boolean))
+    )
 
     // Parse dd/mm/yyyy date if possible
     let isoDate = new Date().toISOString()

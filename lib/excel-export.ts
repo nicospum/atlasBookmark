@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx'
-import { BookmarkItem } from './types'
+import { BookmarkItem, GalleryRepository } from './types'
+import { evaluateAndClassifyRepository, extractInstallAndSetupSnippets } from './github-gallery'
 
 export interface ExportOptions {
   sheets: string[]
@@ -445,6 +446,264 @@ export function downloadJsonBackupFile(items: BookmarkItem[], filename?: string)
   const finalName = filename || `atlas-backup-v2-${new Date().toISOString().slice(0, 10)}.json`
   if (typeof window !== 'undefined') {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = finalName
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+  return finalName
+}
+
+export const REPO_MASTER_EXCEL_COLUMNS = [
+  'Repositorio',
+  'Qué es y para qué sirve (Español)',
+  'Tipo de Recurso',
+  'Área / Categoría',
+  'Empresa / Organización / Autor',
+  'Tipo de Creador',
+  'Estrellas (★)',
+  'Forks',
+  'Puntaje Atlas (1-10)',
+  'Dictamen de Puntaje',
+  'Grado de Seguridad',
+  'Análisis de Seguridad y Permisos',
+  'Para qué Proyecto Sirve (Casos de Uso)',
+  'Nivel de Madurez',
+  'Complejidad de Integración',
+  'Licencia y Uso Comercial',
+  'Lenguaje Principal',
+  'Comando de Instalación / 1-Clic',
+  'Origen y Estado de Verificación',
+  'URL Oficial GitHub',
+  'Notas y Contexto en Guardados'
+]
+
+export function mapRepoToMasterExcelRow(
+  repo: GalleryRepository,
+  bookmarks: BookmarkItem[] = []
+): Record<string, string | number> {
+  const ev = repo.agentEvaluation || evaluateAndClassifyRepository(repo, bookmarks)
+  const install = extractInstallAndSetupSnippets(repo)
+
+  const linkedBms = bookmarks.filter(bm => {
+    if ((repo.linkedBookmarkIds || []).includes(bm.id)) return true
+    return (bm.resources || []).some(
+      r => (r.fullName || '').toLowerCase() === (repo.fullName || '').toLowerCase()
+    )
+  })
+  const nonGithubBms = linkedBms.filter(b => b.platform !== 'github')
+  const contextSnippet = nonGithubBms
+    .map(b => `${b.authorHandle || b.authorName} (${b.platform.toUpperCase()}): ${(b.caption || '').replace(/\s+/g, ' ').slice(0, 140)}`)
+    .slice(0, 2)
+    .join(' || ')
+
+  const combinedNotes = [repo.notes, contextSnippet].filter(Boolean).join(' — ')
+
+  return {
+    Repositorio: sanitizeFormulaCell(repo.fullName || `${repo.owner}/${repo.name}`),
+    'Qué es y para qué sirve (Español)': sanitizeFormulaCell(ev.whatIsItEs),
+    'Tipo de Recurso': sanitizeFormulaCell(repo.resourceType || 'Librería, framework o SDK'),
+    'Área / Categoría': sanitizeFormulaCell(ev.areaCategory),
+    'Empresa / Organización / Autor': sanitizeFormulaCell(ev.companyOrAuthor),
+    'Tipo de Creador': sanitizeFormulaCell(ev.creatorKind),
+    'Estrellas (★)': Number(repo.stars) || 0,
+    Forks: Number(repo.forks) || 0,
+    'Puntaje Atlas (1-10)': ev.atlasScore,
+    'Dictamen de Puntaje': sanitizeFormulaCell(ev.atlasScoreLabel),
+    'Grado de Seguridad': sanitizeFormulaCell(ev.securityGrade),
+    'Análisis de Seguridad y Permisos': sanitizeFormulaCell(ev.securitySummary),
+    'Para qué Proyecto Sirve (Casos de Uso)': sanitizeFormulaCell(ev.projectUseCases),
+    'Nivel de Madurez': sanitizeFormulaCell(ev.maturityLevel),
+    'Complejidad de Integración': sanitizeFormulaCell(ev.integrationComplexity),
+    'Licencia y Uso Comercial': sanitizeFormulaCell(ev.licenseSummary),
+    'Lenguaje Principal': sanitizeFormulaCell(repo.primaryLanguage || 'Multi-lenguaje / Docs'),
+    'Comando de Instalación / 1-Clic': sanitizeFormulaCell(install.primaryCommand),
+    'Origen y Estado de Verificación': sanitizeFormulaCell(`${ev.sourcesSummary} · ${ev.verificationStatusLabel}`),
+    'URL Oficial GitHub': repo.url || `https://github.com/${repo.owner}/${repo.name}`,
+    'Notas y Contexto en Guardados': sanitizeFormulaCell(combinedNotes)
+  }
+}
+
+function attachRepoColumnWidthsAndFilter(ws: XLSX.WorkSheet, rowCount: number) {
+  ws['!cols'] = [
+    { wch: 28 }, // Repositorio
+    { wch: 52 }, // Qué es y para qué sirve
+    { wch: 26 }, // Tipo de Recurso
+    { wch: 32 }, // Área / Categoría
+    { wch: 30 }, // Empresa / Autor
+    { wch: 28 }, // Tipo de Creador
+    { wch: 14 }, // Estrellas
+    { wch: 12 }, // Forks
+    { wch: 18 }, // Puntaje Atlas
+    { wch: 28 }, // Dictamen de Puntaje
+    { wch: 18 }, // Grado de Seguridad
+    { wch: 46 }, // Análisis de Seguridad
+    { wch: 50 }, // Para qué Proyecto Sirve
+    { wch: 24 }, // Nivel de Madurez
+    { wch: 26 }, // Complejidad de Integración
+    { wch: 36 }, // Licencia
+    { wch: 18 }, // Lenguaje Principal
+    { wch: 42 }, // Comando de Instalación
+    { wch: 38 }, // Origen y Estado
+    { wch: 40 }, // URL Oficial GitHub
+    { wch: 48 }  // Notas y Contexto
+  ]
+  if (rowCount > 0 && ws['!ref']) {
+    ws['!autofilter'] = { ref: ws['!ref'] }
+  }
+}
+
+export function buildRepositoriesWorkbook(
+  repos: GalleryRepository[],
+  bookmarks: BookmarkItem[] = []
+): XLSX.WorkBook {
+  const wb = XLSX.utils.book_new()
+
+  const enriched = repos.map(r => ({
+    ...r,
+    agentEvaluation: r.agentEvaluation || evaluateAndClassifyRepository(r, bookmarks)
+  }))
+
+  // Sort master list by Atlas Score desc, then Stars desc
+  const sortedMaster = [...enriched].sort((a, b) => {
+    const scoreDiff = (b.agentEvaluation?.atlasScore || 0) - (a.agentEvaluation?.atlasScore || 0)
+    if (Math.abs(scoreDiff) >= 0.2) return scoreDiff
+    return (b.stars || 0) - (a.stars || 0)
+  })
+
+  // 1. Sheet: Catálogo Maestro
+  const masterRows = sortedMaster.map(r => mapRepoToMasterExcelRow(r, bookmarks))
+  const wsMaster = XLSX.utils.json_to_sheet(masterRows, { header: REPO_MASTER_EXCEL_COLUMNS })
+  attachRepoColumnWidthsAndFilter(wsMaster, masterRows.length)
+  XLSX.utils.book_append_sheet(wb, wsMaster, 'Catálogo Maestro')
+
+  // 2. Sheet: Skills, MCPs y Agentes
+  const agenticRepos = sortedMaster.filter(
+    r =>
+      r.resourceType === 'Skill' ||
+      r.resourceType === 'Servidor MCP o conector' ||
+      r.resourceType === 'Agente o workflow' ||
+      r.agentEvaluation?.areaCategory === 'Agentes Autónomos, Skills & MCP'
+  )
+  const agenticRows = agenticRepos.map(r => mapRepoToMasterExcelRow(r, bookmarks))
+  const wsAgentic = XLSX.utils.json_to_sheet(agenticRows, { header: REPO_MASTER_EXCEL_COLUMNS })
+  attachRepoColumnWidthsAndFilter(wsAgentic, agenticRows.length)
+  XLSX.utils.book_append_sheet(wb, wsAgentic, 'Skills, MCPs y Agentes')
+
+  // 3. Sheet: Por Área y Proyecto
+  const sortedByArea = [...sortedMaster].sort((a, b) => {
+    const areaCmp = (a.agentEvaluation?.areaCategory || '').localeCompare(
+      b.agentEvaluation?.areaCategory || ''
+    )
+    if (areaCmp !== 0) return areaCmp
+    return (b.agentEvaluation?.atlasScore || 0) - (a.agentEvaluation?.atlasScore || 0)
+  })
+  const areaRows = sortedByArea.map(r => mapRepoToMasterExcelRow(r, bookmarks))
+  const wsArea = XLSX.utils.json_to_sheet(areaRows, { header: REPO_MASTER_EXCEL_COLUMNS })
+  attachRepoColumnWidthsAndFilter(wsArea, areaRows.length)
+  XLSX.utils.book_append_sheet(wb, wsArea, 'Por Área y Proyecto')
+
+  // 4. Sheet: Top Puntaje y Seguridad
+  const topTrusted = sortedMaster.filter(
+    r =>
+      (r.agentEvaluation?.atlasScore || 0) >= 7.5 &&
+      r.agentEvaluation?.securityGrade !== 'Precaución'
+  )
+  const topRows = topTrusted.map(r => mapRepoToMasterExcelRow(r, bookmarks))
+  const wsTop = XLSX.utils.json_to_sheet(topRows, { header: REPO_MASTER_EXCEL_COLUMNS })
+  attachRepoColumnWidthsAndFilter(wsTop, topRows.length)
+  XLSX.utils.book_append_sheet(wb, wsTop, 'Top Puntaje y Seguridad')
+
+  // 5. Sheet: Resumen Ejecutivo
+  const areaCounts: Record<string, number> = {}
+  const typeCounts: Record<string, number> = {}
+  const secCounts: Record<string, number> = {}
+  const creatorCounts: Record<string, number> = {}
+
+  for (const r of sortedMaster) {
+    const area = r.agentEvaluation?.areaCategory || 'Otros'
+    const rt = r.resourceType || 'Otro'
+    const sec = r.agentEvaluation?.securityGrade || 'Medio'
+    const ck = r.agentEvaluation?.creatorKind || 'Autor / Comunidad Independiente'
+    areaCounts[area] = (areaCounts[area] || 0) + 1
+    typeCounts[rt] = (typeCounts[rt] || 0) + 1
+    secCounts[sec] = (secCounts[sec] || 0) + 1
+    creatorCounts[ck] = (creatorCounts[ck] || 0) + 1
+  }
+
+  const summaryRows: Array<{ Categoría: string; Detalle: string; Cantidad: number | string }> = [
+    { Categoría: 'Métrica General', Detalle: 'Total de Repositorios y Herramientas Clasificados', Cantidad: sortedMaster.length },
+    { Categoría: 'Métrica General', Detalle: 'Skills, Servidores MCP y Agentes Autónomos', Cantidad: agenticRepos.length },
+    {
+      Categoría: 'Métrica General',
+      Detalle: 'Puntaje Promedio Atlas (1-10)',
+      Cantidad:
+        sortedMaster.length > 0
+          ? Number(
+              (
+                sortedMaster.reduce((acc, r) => acc + (r.agentEvaluation?.atlasScore || 7), 0) /
+                sortedMaster.length
+              ).toFixed(2)
+            )
+          : 0
+    },
+    ...Object.entries(areaCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => ({ Categoría: 'Por Área / Dominio', Detalle: k, Cantidad: v })),
+    ...Object.entries(typeCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => ({ Categoría: 'Por Tipo de Recurso', Detalle: k, Cantidad: v })),
+    ...Object.entries(secCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => ({ Categoría: 'Por Grado de Seguridad', Detalle: k, Cantidad: v })),
+    ...Object.entries(creatorCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => ({ Categoría: 'Por Tipo de Creador / Empresa', Detalle: k, Cantidad: v }))
+  ]
+
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows)
+  wsSummary['!cols'] = [{ wch: 30 }, { wch: 50 }, { wch: 16 }]
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumen Ejecutivo')
+
+  return wb
+}
+
+export function generateRepositoriesExcelFile(
+  repos: GalleryRepository[],
+  bookmarks: BookmarkItem[] = [],
+  filename?: string
+): string {
+  const wb = buildRepositoriesWorkbook(repos, bookmarks)
+  const finalName =
+    filename || `atlas-catalogo-repositorios-ia-${new Date().toISOString().slice(0, 10)}.xlsx`
+  XLSX.writeFile(wb, finalName)
+  return finalName
+}
+
+export function downloadRepositoriesCsvFile(
+  repos: GalleryRepository[],
+  bookmarks: BookmarkItem[] = [],
+  filename?: string
+): string {
+  const rows = repos.map(r => mapRepoToMasterExcelRow(r, bookmarks))
+  const escapeCsv = (val: unknown): string => {
+    const s = sanitizeFormulaCell(String(val ?? '').replace(/\r?\n/g, ' '))
+    if (s.includes(',') || s.includes('"') || s.includes(';') || s.includes('\n')) {
+      return `"${s.replace(/"/g, '""')}"`
+    }
+    return s
+  }
+  const headerLine = REPO_MASTER_EXCEL_COLUMNS.map(escapeCsv).join(',')
+  const dataLines = rows.map(row =>
+    REPO_MASTER_EXCEL_COLUMNS.map(col => escapeCsv(row[col] ?? '')).join(',')
+  )
+  const csvContent = `\uFEFF${[headerLine, ...dataLines].join('\r\n')}\r\n`
+  const finalName =
+    filename || `atlas-catalogo-repositorios-ia-${new Date().toISOString().slice(0, 10)}.csv`
+  if (typeof window !== 'undefined') {
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url

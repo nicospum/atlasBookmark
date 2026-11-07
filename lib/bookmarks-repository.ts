@@ -23,6 +23,7 @@ import {
 import {
   AnalysisState,
   BookmarkItem,
+  DeepHuntResultItem,
   GalleryRepository,
   ImportHistoryEntry,
   ImportResult,
@@ -39,9 +40,17 @@ import {
   buildLinkedResourcesFromUrls,
   isShortenerUrl,
   resolveShortenedUrl,
-  classifyGitHubUrl
+  classifyGitHubUrl,
+  hydrateXStatusUrl,
+  searchGitHubRepoByPostContext
 } from './resource-investigator'
-import { galleryRepoToBookmarkItem } from './github-gallery'
+import {
+  galleryRepoToBookmarkItem,
+  extractRepositoriesFromAnyListOrPage,
+  buildDeterministicSpanishExplanations,
+  numericIdFromFullName,
+  fetchGitHubRepositoryData
+} from './github-gallery'
 
 export interface QueryFilters {
   search?: string
@@ -929,6 +938,366 @@ export async function expandShortenedUrlsBatch(limit = 30): Promise<{
     expandedUrls,
     newGitHubRepos: Math.max(0, afterRepoCount - beforeRepoCount),
     expandedExamples
+  }
+}
+
+/**
+ * Deep Repo Hunter ("Cazador Profundo de Repositorios Ocultos"):
+ * For saved posts from X, WhatsApp, or Instagram where the GitHub repository link
+ * is NOT in the initial post (e.g. bare X link sent via WhatsApp, link in replies/comments,
+ * behind an intermediate landing page, or only mentioned by name/CLI in a video or caption):
+ * 1. Hydrates bare X/Twitter status URLs via FxTwitter / VxTwitter / oEmbed.
+ * 2. Expands shortlinks (t.co, bit.ly) and scrapes external landing pages for github.com/owner/repo links.
+ * 3. Infers candidate tool/repo names from post context and searches GitHub API to discover the repository.
+ */
+export async function huntMissingGitHubReposBatch(options: {
+  limit?: number
+  platform?: SourcePlatform | 'all'
+  bookmarkIds?: string[]
+  token?: string | null
+} = {}): Promise<{
+  scannedCount: number
+  hydratedPostsCount: number
+  discoveredReposCount: number
+  newGalleryReposCount: number
+  findings: DeepHuntResultItem[]
+}> {
+  const limit = Math.min(60, Math.max(1, options.limit || 20))
+  const all = getAllBookmarks()
+  const beforeRepoCount = getAllGalleryRepositories().length
+
+  const hasGitHubRepoAlready = (bm: BookmarkItem): boolean => {
+    if (bm.platform === 'github') return true
+    if ((bm.resources || []).some(r => r.kind === 'github_repo')) return true
+    return (bm.outgoingLinks || []).some(u => classifyGitHubUrl(u)?.kind === 'github_repo')
+  }
+
+  let candidates: BookmarkItem[] = []
+  if (Array.isArray(options.bookmarkIds) && options.bookmarkIds.length > 0) {
+    const idSet = new Set(options.bookmarkIds)
+    candidates = all.filter(b => idSet.has(b.id))
+  } else {
+    candidates = all.filter(b => {
+      if (b.platform === 'github') return false
+      if (options.platform && options.platform !== 'all' && b.platform !== options.platform) {
+        return false
+      }
+      return !hasGitHubRepoAlready(b)
+    })
+  }
+
+  let scannedCount = 0
+  let hydratedPostsCount = 0
+  let discoveredReposCount = 0
+  const findings: DeepHuntResultItem[] = []
+
+  for (const bm of candidates.slice(0, limit)) {
+    scannedCount++
+    let currentCaption = bm.caption || ''
+    let currentAuthorName = bm.authorName
+    let currentAuthorHandle = bm.authorHandle
+    const currentLinks = new Set<string>(bm.outgoingLinks || [])
+    const discoveredForThisBm: DeepHuntResultItem['discoveredRepos'] = []
+
+    // Collect any X status URLs from sourceUrl, outgoingLinks, or inline caption (common in WhatsApp!)
+    const inlineXUrls =
+      currentCaption.match(/https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/gi) || []
+    const xUrlsToHydrate = Array.from(
+      new Set([
+        ...(/^(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/i.test(bm.sourceUrl)
+          ? [bm.sourceUrl]
+          : []),
+        ...Array.from(currentLinks).filter(u =>
+          /^(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/i.test(u)
+        ),
+        ...inlineXUrls
+      ])
+    )
+
+    // Step 1: Hydrate X/Twitter status URLs (especially helpful for WhatsApp bare links or truncated tweets)
+    for (const xUrl of xUrlsToHydrate.slice(0, 2)) {
+      const hydrated = await hydrateXStatusUrl(xUrl)
+      if (!hydrated) continue
+
+      if (
+        hydrated.text &&
+        (currentCaption.trim().length < 50 || /^https?:\/\/\S+$/i.test(currentCaption.trim()))
+      ) {
+        currentCaption = currentCaption.includes(hydrated.text.slice(0, 30))
+          ? currentCaption
+          : `${currentCaption}\n\n[Texto recuperado de X]: ${hydrated.text}`.trim()
+        hydratedPostsCount++
+      }
+      if (hydrated.authorName && (currentAuthorName === 'WhatsApp' || !currentAuthorName)) {
+        currentAuthorName = `${hydrated.authorName} (vía WhatsApp)`
+      }
+      if (hydrated.authorHandle && (currentAuthorHandle === 'WhatsApp' || !currentAuthorHandle)) {
+        currentAuthorHandle = hydrated.authorHandle
+      }
+
+      for (const u of hydrated.expandedUrls) {
+        currentLinks.add(u)
+      }
+      for (const ghUrl of hydrated.discoveredGitHubUrls) {
+        const parsedGh = classifyGitHubUrl(ghUrl)
+        if (parsedGh?.fullName) {
+          discoveredForThisBm.push({
+            fullName: parsedGh.fullName,
+            url: parsedGh.canonicalUrl,
+            description: `Hallado al hidratar post de X (${xUrl})`,
+            discoveryMethod: 'tweet_hydration',
+            confidence: 'confirmado'
+          })
+        }
+      }
+    }
+
+    // Step 2: Expand shortlinks & scrape external landing pages for GitHub links
+    const nonSocialLinks = Array.from(currentLinks).filter(
+      u => !/^(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com|instagram\.com)\//i.test(u)
+    )
+    for (const extUrl of nonSocialLinks.slice(0, 3)) {
+      const ghDirect = classifyGitHubUrl(extUrl)
+      if (ghDirect?.kind === 'github_repo' && ghDirect.fullName) {
+        if (!discoveredForThisBm.some(d => d.fullName.toLowerCase() === ghDirect.fullName!.toLowerCase())) {
+          discoveredForThisBm.push({
+            fullName: ghDirect.fullName,
+            url: ghDirect.canonicalUrl,
+            description: 'Enlace directo a repositorio GitHub',
+            discoveryMethod: 'shortlink_expansion',
+            confidence: 'confirmado'
+          })
+        }
+        continue
+      }
+
+      const live = await investigateResourceUrlLive(extUrl, currentCaption, bm.topics)
+      upsertCachedResource(live.resource)
+      for (const ghUrl of live.discoveredGitHubUrls) {
+        currentLinks.add(ghUrl)
+        const parsedGh = classifyGitHubUrl(ghUrl)
+        if (
+          parsedGh?.fullName &&
+          !discoveredForThisBm.some(d => d.fullName.toLowerCase() === parsedGh.fullName!.toLowerCase())
+        ) {
+          discoveredForThisBm.push({
+            fullName: parsedGh.fullName,
+            url: parsedGh.canonicalUrl,
+            description: `Descubierto dentro de la página externa (${live.resource.domain || extUrl})`,
+            discoveryMethod: 'external_page_scrape',
+            confidence: 'confirmado'
+          })
+        }
+      }
+    }
+
+    // Step 3: If still no GitHub repo found, infer tool/repo name from caption/video/thread & search GitHub API!
+    if (discoveredForThisBm.length === 0) {
+      const searched = await searchGitHubRepoByPostContext({
+        caption: currentCaption,
+        title: bm.title,
+        authorHandle: currentAuthorHandle,
+        authorName: currentAuthorName,
+        entities: bm.entities,
+        token: options.token
+      })
+      if (searched) {
+        currentLinks.add(searched.url)
+        discoveredForThisBm.push({
+          fullName: searched.fullName,
+          url: searched.url,
+          description: searched.description || `Inferido por búsqueda inteligente en GitHub API`,
+          stars: searched.stars,
+          discoveryMethod: 'github_search_inference',
+          confidence: searched.confidence
+        })
+      }
+    }
+
+    if (discoveredForThisBm.length > 0 || currentCaption !== bm.caption) {
+      discoveredReposCount += discoveredForThisBm.length
+      const updatedLinks = Array.from(currentLinks)
+      const syn = synthesizeBookmarkFields({
+        caption: currentCaption,
+        authorName: currentAuthorName,
+        authorHandle: currentAuthorHandle,
+        platform: bm.platform,
+        outgoingLinks: updatedLinks,
+        topics: bm.topics,
+        entities: bm.entities,
+        existingResources: bm.resources
+      })
+
+      const manualFields = new Set(bm.manualFields || [])
+      const huntNote =
+        discoveredForThisBm.length > 0
+          ? `[Cazador de Repos]: ${discoveredForThisBm
+              .map(d => `${d.fullName} (${d.discoveryMethod === 'github_search_inference' ? 'búsqueda GitHub' : 'hidratación de link'})`)
+              .join(', ')}`
+          : ''
+
+      updateBookmark(
+        bm.id,
+        {
+          caption: currentCaption,
+          authorName: currentAuthorName,
+          authorHandle: currentAuthorHandle,
+          outgoingLinks: updatedLinks,
+          resources: syn.resources,
+          analysisState: 'completed',
+          ...(manualFields.has('title') ? {} : { title: syn.title }),
+          ...(manualFields.has('purpose') ? {} : { purpose: syn.purpose, aiSummary: syn.purpose }),
+          ...(manualFields.has('resourceType') ? {} : { resourceType: syn.resourceType }),
+          ...(manualFields.has('evaluation') ? {} : { evaluation: syn.evaluation }),
+          ...(huntNote && !(bm.notes || '').includes(huntNote)
+            ? { notes: [bm.notes, huntNote].filter(Boolean).join('\n') }
+            : {})
+        },
+        false
+      )
+
+      if (discoveredForThisBm.length > 0) {
+        findings.push({
+          bookmarkId: bm.id,
+          bookmarkTitle: syn.title || bm.title || bm.id,
+          platform: bm.platform,
+          sourceUrl: bm.sourceUrl,
+          discoveredRepos: discoveredForThisBm
+        })
+      }
+    }
+  }
+
+  syncBookmarksToGitHubGallery(true)
+  const afterRepoCount = getAllGalleryRepositories().length
+
+  return {
+    scannedCount,
+    hydratedPostsCount,
+    discoveredReposCount,
+    newGalleryReposCount: Math.max(0, afterRepoCount - beforeRepoCount),
+    findings
+  }
+}
+
+/**
+ * Super-Importer for Lists of Repositories & Awesome Pages with Strict Deduplication:
+ * Accepts free text (URLs, Markdown lists, CSV, JSON, or shorthand `owner/repo` lines)
+ * and/or a Page/Awesome-List URL, extracts all repositories, skips duplicates already in DB,
+ * and saves all new ones into the Gallery & Bookmarks catalog.
+ */
+export async function importRepositoryListWithDeduplication(params: {
+  text?: string
+  pageUrl?: string
+  enrichLiveCount?: number
+  token?: string | null
+  notes?: string
+}): Promise<{
+  sourceLabel: string
+  totalDetected: number
+  added: number
+  duplicatesSkipped: number
+  addedFullNames: string[]
+  skippedFullNames: string[]
+  repositories: GalleryRepository[]
+}> {
+  const { extracted, sourceLabel } = await extractRepositoriesFromAnyListOrPage({
+    text: params.text,
+    pageUrl: params.pageUrl,
+    token: params.token
+  })
+
+  let added = 0
+  let duplicatesSkipped = 0
+  const addedFullNames: string[] = []
+  const skippedFullNames: string[] = []
+  const enrichLimit = typeof params.enrichLiveCount === 'number' ? params.enrichLiveCount : 8
+  let liveFetchedSoFar = 0
+
+  for (const item of extracted) {
+    const fullName = `${item.owner}/${item.repo}`
+    const existing = getGalleryRepositoryByFullName(fullName)
+
+    if (existing) {
+      duplicatesSkipped++
+      skippedFullNames.push(existing.fullName)
+      // If the existing entry had no notes and the imported list provided contextHint, preserve it non-destructively
+      if (item.contextHint && !existing.notes) {
+        upsertGalleryRepository({
+          ...existing,
+          notes: `Contexto de lista (${sourceLabel}): ${item.contextHint}`
+        })
+      }
+      continue
+    }
+
+    let newRepo: GalleryRepository | null = null
+    if (liveFetchedSoFar < enrichLimit) {
+      try {
+        newRepo = await fetchGitHubRepositoryData(item.owner, item.repo, params.token)
+        liveFetchedSoFar++
+      } catch {
+        newRepo = null
+      }
+    }
+
+    if (!newRepo) {
+      const now = new Date().toISOString()
+      const initialDesc =
+        item.contextHint || `Repositorio importado desde ${sourceLabel} (${fullName}).`
+      const baseRepo: GalleryRepository = {
+        id: numericIdFromFullName(fullName),
+        owner: item.owner,
+        name: item.repo,
+        fullName,
+        url: item.cleanUrl,
+        avatarUrl: `https://github.com/${item.owner}.png?size=128`,
+        description: initialDesc,
+        explanation: initialDesc,
+        imageUrl: `https://opengraph.githubassets.com/1/${item.owner}/${item.repo}`,
+        imageSource: 'opengraph',
+        stars: 0,
+        forks: 0,
+        openIssues: 0,
+        primaryLanguage: null,
+        languages: [],
+        topics: [],
+        license: null,
+        createdAt: now,
+        updatedAt: now,
+        pushedAt: now,
+        latestRelease: null,
+        addedAt: now,
+        homepage: null,
+        defaultBranch: 'main',
+        notes: params.notes || (item.contextHint ? `Importado de ${sourceLabel}: ${item.contextHint}` : `Importado de ${sourceLabel}`)
+      }
+      const synth = buildDeterministicSpanishExplanations(baseRepo)
+      baseRepo.shortExplanationEs = synth.shortExplanationEs
+      baseRepo.longExplanationEs = synth.longExplanationEs
+      baseRepo.explanation = synth.shortExplanationEs
+      baseRepo.resourceType = synth.resourceType
+      newRepo = baseRepo
+    } else if (params.notes || item.contextHint) {
+      newRepo.notes = [params.notes, item.contextHint ? `Lista (${sourceLabel}): ${item.contextHint}` : '']
+        .filter(Boolean)
+        .join(' — ')
+    }
+
+    saveGalleryRepoWithBookmark(newRepo)
+    added++
+    addedFullNames.push(newRepo.fullName)
+  }
+
+  const repositories = getAllGalleryRepositories()
+  return {
+    sourceLabel,
+    totalDetected: extracted.length,
+    added,
+    duplicatesSkipped,
+    addedFullNames,
+    skippedFullNames,
+    repositories
   }
 }
 

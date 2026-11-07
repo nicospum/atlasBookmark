@@ -12,7 +12,9 @@ import {
   getAllProjectBlueprints,
   upsertProjectBlueprint,
   deleteProjectBlueprint,
-  expandShortenedUrlsBatch
+  expandShortenedUrlsBatch,
+  huntMissingGitHubReposBatch,
+  importRepositoryListWithDeduplication
 } from '@/lib/bookmarks-repository'
 import {
   parseGitHubUrl,
@@ -21,9 +23,19 @@ import {
   parseGalleryImportJson,
   buildDeterministicSpanishExplanations,
   fetchUserStarredRepos,
-  generateProjectMasterPrompt
+  generateProjectMasterPrompt,
+  evaluateAndClassifyRepository,
+  extractRepositoriesFromAnyListOrPage
 } from '@/lib/github-gallery'
 import type { AiProviderId, GalleryRepository, ProjectBlueprint, ResourceType } from '@/lib/types'
+
+function enrichReposWithAgentEvaluation(repos: GalleryRepository[]): GalleryRepository[] {
+  const bookmarks = getAllBookmarks()
+  return repos.map(r => ({
+    ...r,
+    agentEvaluation: evaluateAndClassifyRepository(r, bookmarks)
+  }))
+}
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -45,7 +57,7 @@ export async function OPTIONS() {
 export async function GET() {
   try {
     syncBookmarksToGitHubGallery()
-    const repositories = getAllGalleryRepositories()
+    const repositories = enrichReposWithAgentEvaluation(getAllGalleryRepositories())
     const blueprints = getAllProjectBlueprints()
     return jsonWithCors({
       success: true,
@@ -314,10 +326,98 @@ export async function POST(request: Request) {
     if (action === 'expand-short-links') {
       const limit = Number(body?.limit) || 30
       const stats = await expandShortenedUrlsBatch(limit)
-      const repositories = getAllGalleryRepositories()
+      const repositories = enrichReposWithAgentEvaluation(getAllGalleryRepositories())
       return jsonWithCors({
         success: true,
         ...stats,
+        total: repositories.length,
+        repositories
+      })
+    }
+
+    if (action === 'hunt-missing-repos') {
+      const limit = Number(body?.limit) || 20
+      const platform = body?.platform || 'all'
+      const bookmarkIds = Array.isArray(body?.bookmarkIds) ? body.bookmarkIds : undefined
+      const huntResult = await huntMissingGitHubReposBatch({
+        limit,
+        platform,
+        bookmarkIds,
+        token
+      })
+      const repositories = enrichReposWithAgentEvaluation(getAllGalleryRepositories())
+      return jsonWithCors({
+        success: true,
+        ...huntResult,
+        total: repositories.length,
+        repositories
+      })
+    }
+
+    if (action === 'preview-list-import') {
+      const text = String(body?.text || '')
+      const pageUrl = String(body?.pageUrl || '')
+      if (!text.trim() && !pageUrl.trim()) {
+        return jsonWithCors(
+          {
+            success: false,
+            error: 'Pegá una lista de repositorios o ingresá la URL de una página / Awesome List.'
+          },
+          { status: 400 }
+        )
+      }
+      const { extracted, sourceLabel } = await extractRepositoriesFromAnyListOrPage({
+        text,
+        pageUrl,
+        token
+      })
+      const existingSet = new Set(
+        getAllGalleryRepositories().map(r => r.fullName.toLowerCase())
+      )
+      const items = extracted.map(item => {
+        const fullName = `${item.owner}/${item.repo}`
+        const alreadyExists = existingSet.has(fullName.toLowerCase())
+        return {
+          ...item,
+          fullName,
+          alreadyExists
+        }
+      })
+      return jsonWithCors({
+        success: true,
+        sourceLabel,
+        totalDetected: items.length,
+        newCount: items.filter(i => !i.alreadyExists).length,
+        duplicateCount: items.filter(i => i.alreadyExists).length,
+        items
+      })
+    }
+
+    if (action === 'import-repo-list') {
+      const text = String(body?.text || '')
+      const pageUrl = String(body?.pageUrl || '')
+      const enrichLiveCount = typeof body?.enrichLiveCount === 'number' ? body.enrichLiveCount : 8
+      const notes = body?.notes ? String(body.notes) : undefined
+      if (!text.trim() && !pageUrl.trim()) {
+        return jsonWithCors(
+          {
+            success: false,
+            error: 'Pegá una lista de repositorios o ingresá la URL de una página / Awesome List.'
+          },
+          { status: 400 }
+        )
+      }
+      const importRes = await importRepositoryListWithDeduplication({
+        text,
+        pageUrl,
+        enrichLiveCount,
+        token,
+        notes
+      })
+      const repositories = enrichReposWithAgentEvaluation(importRes.repositories)
+      return jsonWithCors({
+        success: true,
+        ...importRes,
         total: repositories.length,
         repositories
       })

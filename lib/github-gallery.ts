@@ -12,6 +12,7 @@ import type {
   InstallSnippetInfo,
   ProjectBlueprint,
   RateLimitInfo,
+  RepoAgentEvaluation,
   ResourceType
 } from './types'
 
@@ -25,6 +26,7 @@ export interface ExtractedRepoUrl {
   repo: string
   cleanUrl: string
   originalMatch: string
+  contextHint?: string
 }
 
 export const GITHUB_RESERVED_NAMES = new Set([
@@ -285,7 +287,58 @@ export function parseGitHubUrl(input: string): ParseRepoResult | null {
   return { owner, repo }
 }
 
-export function extractGitHubUrlsFromText(text: string): ExtractedRepoUrl[] {
+const NON_REPO_SHORTHAND_OWNERS = new Set([
+  'http',
+  'https',
+  'www',
+  'src',
+  'app',
+  'lib',
+  'components',
+  'pages',
+  'public',
+  'data',
+  'scripts',
+  'tests',
+  'node_modules',
+  'dist',
+  'build',
+  'assets',
+  'images',
+  'text',
+  'application',
+  'image',
+  'video',
+  'audio',
+  'multipart',
+  'x',
+  'twitter',
+  'instagram',
+  'whatsapp',
+  't',
+  'bit',
+  'usr',
+  'var',
+  'etc',
+  'bin',
+  'home',
+  'users',
+  'ci',
+  'cd',
+  'ui',
+  'ux',
+  'ai',
+  'ml',
+  'io',
+  'os',
+  'db',
+  'api',
+  'v1',
+  'v2',
+  'v3'
+])
+
+export function extractGitHubUrlsFromText(text: string, allowShorthand = false): ExtractedRepoUrl[] {
   if (!text || typeof text !== 'string') return []
   const regex =
     /(?:https?:\/\/)?(?:www\.)?github\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)(?:[^\s<>"'`)\]]*)?/gi
@@ -293,6 +346,9 @@ export function extractGitHubUrlsFromText(text: string): ExtractedRepoUrl[] {
   const seen = new Set<string>()
   const results: ExtractedRepoUrl[] = []
   let match: RegExpExecArray | null
+
+  // Map line context for richer descriptions when importing Awesome lists or notes
+  const lines = text.split(/\r?\n/)
 
   while ((match = regex.exec(text)) !== null) {
     const fullMatch = match[0]
@@ -311,14 +367,68 @@ export function extractGitHubUrlsFromText(text: string): ExtractedRepoUrl[] {
     const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`
     if (!seen.has(key)) {
       seen.add(key)
+      // Find matching line to extract surrounding description if available
+      const matchingLine = lines.find(l => l.includes(`${owner}/${repo}`)) || ''
+      const cleanHint = matchingLine
+        .replace(/https?:\/\/\S+/g, '')
+        .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+        .replace(new RegExp(`${owner}\\/${repo}`, 'gi'), '')
+        .replace(/^[\s*\-•#|\d.:\]()—–]+/, '')
+        .replace(/[\s|—–-]+$/, '')
+        .trim()
+
       results.push({
         owner,
         repo,
         cleanUrl: `https://github.com/${owner}/${repo}`,
-        originalMatch: fullMatch
+        originalMatch: fullMatch,
+        contextHint: cleanHint.length >= 10 ? cleanHint.slice(0, 260) : undefined
       })
     }
   }
+
+  if (allowShorthand) {
+    for (const rawLine of lines) {
+      const line = rawLine.trim()
+      if (!line || line.startsWith('#')) continue
+      // Skip lines that already have full http:// or github.com URLs
+      if (/github\.com\//i.test(line)) continue
+
+      // Match standalone `owner/repo` or bullet `- owner/repo: description` or `owner/repo - description`
+      const shortMatch = line.match(
+        /^(?:[-*•\d.)\s`[\]]*)?([a-zA-Z][a-zA-Z0-9_-]{1,38})\/([a-zA-Z0-9_.-]{2,80})(?:\s*[-:–—|]\s*(.*))?$/
+      )
+      if (!shortMatch) continue
+      const owner = shortMatch[1].trim()
+      let repo = shortMatch[2].trim().replace(/[.,;:!?)\],'`">]+$/, '')
+      const descHint = (shortMatch[3] || '').trim()
+
+      if (repo.endsWith('.git')) repo = repo.slice(0, -4)
+      if (
+        !owner ||
+        !repo ||
+        GITHUB_RESERVED_NAMES.has(owner.toLowerCase()) ||
+        GITHUB_RESERVED_NAMES.has(repo.toLowerCase()) ||
+        NON_REPO_SHORTHAND_OWNERS.has(owner.toLowerCase()) ||
+        /\.(?:ts|tsx|js|jsx|json|md|py|css|html|yml|yaml|sh|txt|csv|png|jpg|svg)$/i.test(repo)
+      ) {
+        continue
+      }
+
+      const key = `${owner.toLowerCase()}/${repo.toLowerCase()}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        results.push({
+          owner,
+          repo,
+          cleanUrl: `https://github.com/${owner}/${repo}`,
+          originalMatch: `${owner}/${repo}`,
+          contextHint: descHint.length >= 8 ? descHint.slice(0, 260) : undefined
+        })
+      }
+    }
+  }
+
   return results
 }
 
@@ -1888,4 +1998,500 @@ export function generateProjectMasterPrompt(params: {
 
   return out.join('\n')
 }
+
+export const KNOWN_GITHUB_ORGANIZATIONS: Record<
+  string,
+  { name: string; kind: RepoAgentEvaluation['creatorKind'] }
+> = {
+  anthropics: { name: 'Anthropic (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  modelcontextprotocol: {
+    name: 'Model Context Protocol (Anthropic / Estándar Abierto)',
+    kind: 'Organización Open Source'
+  },
+  openai: { name: 'OpenAI (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  google: { name: 'Google (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'google-gemini': { name: 'Google Gemini (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'google-deepmind': { name: 'Google DeepMind (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  googleapis: { name: 'Google Cloud / APIs (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  firebase: { name: 'Firebase / Google (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  microsoft: { name: 'Microsoft (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  facebook: { name: 'Meta (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  facebookresearch: { name: 'Meta AI Research (FAIR)', kind: 'Empresa / Laboratorio Oficial' },
+  'meta-llama': { name: 'Meta Llama (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  vercel: { name: 'Vercel (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'vercel-labs': { name: 'Vercel Labs (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  cloudflare: { name: 'Cloudflare (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  huggingface: { name: 'Hugging Face (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'langchain-ai': { name: 'LangChain (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'run-llama': { name: 'LlamaIndex (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'browser-use': { name: 'Browser Use (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  qwenlm: { name: 'Alibaba Cloud / Qwen (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'deepseek-ai': { name: 'DeepSeek AI (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  mistralai: { name: 'Mistral AI (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  ollama: { name: 'Ollama (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'vllm-project': { name: 'vLLM Project', kind: 'Organización Open Source' },
+  ggerganov: { name: 'Georgi Gerganov (llama.cpp / GGML)', kind: 'Organización Open Source' },
+  'ggml-org': { name: 'GGML Organization (llama.cpp)', kind: 'Organización Open Source' },
+  pydantic: { name: 'Pydantic (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  crewaiinc: { name: 'CrewAI (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'n8n-io': { name: 'n8n (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  langgenius: { name: 'Dify / LangGenius (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'open-webui': { name: 'Open WebUI', kind: 'Organización Open Source' },
+  'all-hands-ai': { name: 'All Hands AI (OpenHands)', kind: 'Empresa / Laboratorio Oficial' },
+  'remotion-dev': { name: 'Remotion (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  'shadcn-ui': { name: 'shadcn / Vercel', kind: 'Organización Open Source' },
+  tailwindlabs: { name: 'Tailwind Labs (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  supabase: { name: 'Supabase (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  neondatabase: { name: 'Neon Serverless Postgres', kind: 'Empresa / Laboratorio Oficial' },
+  stripe: { name: 'Stripe (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  apify: { name: 'Apify (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  firecrawl: { name: 'Firecrawl / Mendable', kind: 'Empresa / Laboratorio Oficial' },
+  mendableai: { name: 'Firecrawl / Mendable AI', kind: 'Empresa / Laboratorio Oficial' },
+  exa: { name: 'Exa AI', kind: 'Empresa / Laboratorio Oficial' },
+  'exa-labs': { name: 'Exa Labs (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  elevenlabs: { name: 'ElevenLabs (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  livekit: { name: 'LiveKit (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  pipecat: { name: 'Pipecat / Daily.co', kind: 'Organización Open Source' },
+  'pipecat-ai': { name: 'Pipecat AI / Daily', kind: 'Empresa / Laboratorio Oficial' },
+  comfyanonymous: { name: 'ComfyUI (Comfyanonymous)', kind: 'Organización Open Source' },
+  'comfy-org': { name: 'Comfy Org (Oficial)', kind: 'Organización Open Source' },
+  ultralytics: { name: 'Ultralytics (YOLO)', kind: 'Empresa / Laboratorio Oficial' },
+  apple: { name: 'Apple (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  nvidia: { name: 'NVIDIA (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  aws: { name: 'Amazon Web Services (AWS)', kind: 'Empresa / Laboratorio Oficial' },
+  awslabs: { name: 'AWS Labs (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  cohere: { name: 'Cohere (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  groq: { name: 'Groq (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  togethercomputer: { name: 'Together AI (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  replicate: { name: 'Replicate (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  modal: { name: 'Modal Labs', kind: 'Empresa / Laboratorio Oficial' },
+  'modal-labs': { name: 'Modal Labs (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  cursor: { name: 'Cursor / Anysphere', kind: 'Empresa / Laboratorio Oficial' },
+  getcursor: { name: 'Cursor / Anysphere', kind: 'Empresa / Laboratorio Oficial' },
+  'continue-dev': { name: 'Continue.dev', kind: 'Organización Open Source' },
+  'cline-bot': { name: 'Cline (Oficial)', kind: 'Organización Open Source' },
+  cline: { name: 'Cline (Oficial)', kind: 'Organización Open Source' },
+  'roo-cline': { name: 'Roo Code', kind: 'Organización Open Source' },
+  roocodeinc: { name: 'Roo Code (Oficial)', kind: 'Empresa / Laboratorio Oficial' },
+  aider: { name: 'Aider AI Pair Programmer', kind: 'Organización Open Source' },
+  'paul-gauthier': { name: 'Paul Gauthier (Aider)', kind: 'Autor / Comunidad Independiente' },
+  karpathy: { name: 'Andrej Karpathy', kind: 'Autor / Comunidad Independiente' },
+  rasbt: { name: 'Sebastian Raschka (LLMs from Scratch)', kind: 'Autor / Comunidad Independiente' },
+  pbakaus: { name: 'Paul Bakaus (AI & Skills Engineering)', kind: 'Autor / Comunidad Independiente' },
+  ebookfoundation: { name: 'Free Ebook Foundation', kind: 'Organización Open Source' },
+  kamranahmedse: { name: 'roadmap.sh (Kamran Ahmed)', kind: 'Organización Open Source' },
+  'codecrafters-io': { name: 'CodeCrafters', kind: 'Organización Open Source' },
+  donnemartin: { name: 'Donne Martin (System Design)', kind: 'Autor / Comunidad Independiente' },
+  jwasham: { name: 'John Washam (Coding Interview University)', kind: 'Autor / Comunidad Independiente' },
+  public_apis: { name: 'Public APIs Collective', kind: 'Organización Open Source' },
+  'public-apis': { name: 'Public APIs Collective', kind: 'Organización Open Source' },
+  punkpeye: { name: 'Frank Fiegel (Glama / MCP Ecosystem)', kind: 'Organización Open Source' }
+}
+
+/**
+ * Agent Classifier & Rich Evaluation Engine for GitHub Repositories and Tools.
+ * Produces structured, domain-specific metadata in Spanish for every repository
+ * so both the in-app views and the Master Excel Export have complete intelligence.
+ */
+export function evaluateAndClassifyRepository(
+  repo: GalleryRepository,
+  linkedBookmarks: BookmarkItem[] = []
+): RepoAgentEvaluation {
+  const ownerLower = (repo.owner || '').toLowerCase()
+  const nameLower = (repo.name || '').toLowerCase()
+  const fullName = repo.fullName || `${repo.owner}/${repo.name}`
+
+  const linkedForRepo = linkedBookmarks.filter(bm => {
+    if ((repo.linkedBookmarkIds || []).includes(bm.id)) return true
+    if (bm.id === `github:${fullName.toLowerCase()}`) return true
+    return (bm.resources || []).some(
+      r => (r.fullName || '').toLowerCase() === fullName.toLowerCase()
+    )
+  })
+
+  const nonSyntheticBms = linkedForRepo.filter(bm => bm.platform !== 'github')
+
+  // 1. Qué es y para qué sirve (whatIsItEs)
+  const synth = buildDeterministicSpanishExplanations(repo)
+  const rType = repo.resourceType || synth.resourceType
+  let whatIsItEs = (repo.shortExplanationEs || repo.explanation || synth.shortExplanationEs || '').trim()
+  if (
+    (!whatIsItEs ||
+      whatIsItEs.includes('detectado en tus guardados') ||
+      whatIsItEs.includes('enfocado en')) &&
+    nonSyntheticBms.length > 0
+  ) {
+    const bestBm = nonSyntheticBms.find(b => b.purpose && b.purpose.length > 25) || nonSyntheticBms[0]
+    if (bestBm?.purpose) {
+      whatIsItEs = bestBm.purpose
+    } else if (bestBm?.caption) {
+      whatIsItEs = bestBm.caption.replace(/https?:\/\/\S+/g, '').replace(/\s+/g, ' ').trim().slice(0, 240)
+    }
+  }
+  if (!whatIsItEs) {
+    whatIsItEs = synth.shortExplanationEs
+  }
+
+  // 2. De qué área es (areaCategory)
+  const combinedSignal = [
+    fullName,
+    whatIsItEs,
+    repo.description || '',
+    ...(repo.topics || []),
+    ...nonSyntheticBms.flatMap(b => b.topics || []),
+    ...nonSyntheticBms.map(b => b.caption || '')
+  ]
+    .join(' ')
+    .toLowerCase()
+
+  let areaCategory = 'Ingeniería de Software & Open Source'
+  if (
+    rType === 'Skill' ||
+    rType === 'Servidor MCP o conector' ||
+    rType === 'Agente o workflow' ||
+    /\b(mcp|model-context-protocol|skill|skills|claude-code|cursor|agent|agents|agente|agentes|subagent|multi-agent|crewai|autogen|langgraph|swarm|openhands|cline|aider|codex|antigravity)\b/i.test(
+      combinedSignal
+    )
+  ) {
+    areaCategory = 'Agentes Autónomos, Skills & MCP'
+  } else if (
+    /\b(tts|stt|voice|voz|speech|audio|whisper|kokoro|cosyvoice|openvoice|video|remotion|ffmpeg|comfyui|diffusion|imagen|avatar|lipsync|multimedia|sound|music)\b/i.test(
+      combinedSignal
+    )
+  ) {
+    areaCategory = 'Voz, Audio, Video & Multimodal'
+  } else if (
+    /\b(rag|vector|embedding|embeddings|database|postgres|sqlite|supabase|redis|memory|memoria|knowledge-graph|scraping|crawler|firecrawl|pdf|ocr|dataset|datos)\b/i.test(
+      combinedSignal
+    )
+  ) {
+    areaCategory = 'Datos, RAG, Memoria & Scraping'
+  } else if (
+    /\b(browser|playwright|puppeteer|selenium|automation|automatizaci[oó]n|n8n|workflow|cron|bot|whatsapp|telegram)\b/i.test(
+      combinedSignal
+    )
+  ) {
+    areaCategory = 'Automatización, Browser & Bots'
+  } else if (
+    /\b(ui|ux|frontend|react|nextjs|tailwind|shadcn|css|design|dise[ñn]o|shader|shaders|webgl|threejs|canvas|animation|figma|component)\b/i.test(
+      combinedSignal
+    )
+  ) {
+    areaCategory = 'Frontend, UI, Shaders & Diseño'
+  } else if (
+    /\b(security|seguridad|pentest|audit|reverse-engineering|reverse|decompile|malware|vulnerability|osint|auth|crypto)\b/i.test(
+      combinedSignal
+    )
+  ) {
+    areaCategory = 'Seguridad, Auditoría & Ingeniería Inversa'
+  } else if (
+    rType === 'Artículo, tutorial, investigación o material educativo' ||
+    /\b(roadmap|book|books|interview|course|curso|tutorial|awesome|cookbook|from-scratch|beginners|handbook|gu[ií]a)\b/i.test(
+      combinedSignal
+    )
+  ) {
+    areaCategory = 'Educación, Roadmaps & Guías Técnicas'
+  } else if (
+    rType === 'Modelo o dataset' ||
+    /\b(llm|llms|gpt|claude|gemini|deepseek|qwen|llama|mistral|ollama|vllm|inference|fine-tuning|transformer|pytorch|ai|inteligencia artificial)\b/i.test(
+      combinedSignal
+    )
+  ) {
+    areaCategory = 'IA Generativa, LLMs & Inferencia'
+  } else if (/\b(cli|terminal|devtools|ide|sdk|compiler|linter|docker|kubernetes|git|shell)\b/i.test(combinedSignal)) {
+    areaCategory = 'DevTools, CLI & Productividad'
+  }
+
+  // 3. Qué empresa u organización lo hace (companyOrAuthor & creatorKind)
+  const knownOrg = KNOWN_GITHUB_ORGANIZATIONS[ownerLower]
+  let companyOrAuthor = `@${repo.owner}`
+  let creatorKind: RepoAgentEvaluation['creatorKind'] = 'Autor / Comunidad Independiente'
+
+  if (knownOrg) {
+    companyOrAuthor = knownOrg.name
+    creatorKind = knownOrg.kind
+  } else if (
+    /(?:-ai|-labs|-dev|-org|-inc|-team|-hq|-io|labs|official|foundation|project|research|studio)$/i.test(
+      ownerLower
+    )
+  ) {
+    const cleanOrgTitle = repo.owner
+      .replace(/[-_]+/g, ' ')
+      .replace(/\b\w/g, c => c.toUpperCase())
+    companyOrAuthor = `${cleanOrgTitle} (Organización)`
+    creatorKind = 'Organización Open Source'
+  } else {
+    companyOrAuthor = `@${repo.owner} (Comunidad Open Source)`
+    creatorKind = 'Autor / Comunidad Independiente'
+  }
+
+  // 4. Licencia y Seguridad (securityGrade, securitySummary, licenseSummary)
+  const lic = (repo.license || '').trim()
+  const isPermissiveLicense = Boolean(lic && /mit|apache|bsd|isc|0bsd|unlicense|cc0/i.test(lic))
+  const isCopyleftLicense = Boolean(lic && /gpl|agpl|lgpl|mpl/i.test(lic))
+
+  let licenseSummary = 'Sin licencia declarada (revisar repositorio antes de uso comercial)'
+  if (isPermissiveLicense) {
+    licenseSummary = `${lic} (Permisiva — Apta para uso comercial y privado)`
+  } else if (isCopyleftLicense) {
+    licenseSummary = `${lic} (Copyleft — Revisar obligaciones de distribución)`
+  } else if (lic && lic !== 'NOASSERTION') {
+    licenseSummary = `${lic} (Verificar términos específicos)`
+  }
+
+  const executesCommandsOrHooks =
+    rType === 'Servidor MCP o conector' ||
+    rType === 'Skill' ||
+    rType === 'Agente o workflow' ||
+    /\b(shell|bash|exec|terminal|browser|playwright|automation|proxy|scraper)\b/i.test(combinedSignal)
+
+  let securityGrade: RepoAgentEvaluation['securityGrade'] = 'Medio'
+  const securityNotes: string[] = []
+
+  if (
+    (creatorKind === 'Empresa / Laboratorio Oficial' || (repo.stars || 0) >= 2500) &&
+    isPermissiveLicense
+  ) {
+    securityGrade = 'Alto'
+    securityNotes.push(
+      `Respaldado por ${
+        creatorKind === 'Empresa / Laboratorio Oficial' ? companyOrAuthor : `alta tracción (★ ${(repo.stars || 0).toLocaleString()})`
+      }`
+    )
+    securityNotes.push(`licencia permisiva ${lic}`)
+    if (executesCommandsOrHooks) {
+      securityNotes.push('revisar alcances de red/archivos al conectar como MCP/Skill')
+    }
+  } else if ((repo.stars || 0) === 0 && !knownOrg && !lic) {
+    securityGrade = 'Precaución'
+    securityNotes.push('Aún no enriquecido con métricas de API o sin licencia explícita')
+    if (executesCommandsOrHooks) {
+      securityNotes.push('ejecuta herramientas de agente/CLI: auditar código antes de dar acceso al sistema')
+    }
+  } else {
+    securityGrade = 'Medio'
+    if (knownOrg) securityNotes.push(`Creador reconocido (${companyOrAuthor})`)
+    else if ((repo.stars || 0) > 0) securityNotes.push(`Comunidad activa (★ ${(repo.stars || 0).toLocaleString()})`)
+    if (isPermissiveLicense) securityNotes.push(`licencia ${lic}`)
+    else if (!lic) securityNotes.push('sin licencia SPDX explícita')
+    if (executesCommandsOrHooks) {
+      securityNotes.push('requiere permisos de agente/CLI (usar en entorno controlado)')
+    }
+  }
+
+  const securitySummary = `${securityGrade}: ${securityNotes.join(' · ')}.`
+
+  // 5. Puntaje Atlas (1.0 - 10.0)
+  let score = 6.2
+  const stars = Number(repo.stars) || 0
+  if (stars >= 50000) score += 2.6
+  else if (stars >= 15000) score += 2.3
+  else if (stars >= 5000) score += 2.0
+  else if (stars >= 1000) score += 1.6
+  else if (stars >= 250) score += 1.2
+  else if (stars >= 50) score += 0.8
+  else if (stars > 0) score += 0.4
+
+  if (creatorKind === 'Empresa / Laboratorio Oficial') score += 0.6
+  else if (creatorKind === 'Organización Open Source') score += 0.3
+
+  if (isPermissiveLicense) score += 0.4
+  if (repo.readme && repo.readme.length > 400) score += 0.3
+  if (nonSyntheticBms.length > 0) score += Math.min(0.6, nonSyntheticBms.length * 0.25)
+  if (
+    rType === 'Skill' ||
+    rType === 'Servidor MCP o conector' ||
+    rType === 'Agente o workflow'
+  ) {
+    score += 0.3
+  }
+
+  // Freshness check
+  const activity = getActivityStatus(repo.pushedAt || repo.updatedAt)
+  if (activity.daysAgo <= 30) score += 0.2
+  else if (activity.daysAgo > 365 && stars < 1000) score -= 0.4
+
+  const atlasScore = Math.round(Math.min(9.9, Math.max(5.0, score)) * 10) / 10
+  const scoreTier =
+    atlasScore >= 9.0
+      ? 'Imprescindible / Top Tier'
+      : atlasScore >= 8.0
+      ? 'Muy Recomendado'
+      : atlasScore >= 7.0
+      ? 'Sólido / Útil'
+      : 'En observación / Nicho'
+  const atlasScoreLabel = `${atlasScore.toFixed(1)} / 10 (${scoreTier})`
+
+  // 6. Nivel de Madurez & Complejidad de Integración
+  let maturityLevel: RepoAgentEvaluation['maturityLevel'] = 'Referencia en guardados'
+  if (stars >= 3000 || (creatorKind === 'Empresa / Laboratorio Oficial' && stars >= 300)) {
+    maturityLevel = 'Producción / Consolidado'
+  } else if (stars >= 100) {
+    maturityLevel = 'En crecimiento activo'
+  } else if (stars > 0) {
+    maturityLevel = 'Experimental / Reciente'
+  }
+
+  const installInfo = extractInstallAndSetupSnippets(repo)
+  let integrationComplexity: RepoAgentEvaluation['integrationComplexity'] = 'Media (Configuración estándar)'
+  if (
+    rType === 'Skill' ||
+    rType === 'Servidor MCP o conector' ||
+    rType === 'Artículo, tutorial, investigación o material educativo' ||
+    installInfo.primaryCommand.startsWith('npx ') ||
+    installInfo.primaryCommand.startsWith('uvx ')
+  ) {
+    integrationComplexity = 'Baja (Plug & Play / 1-Clic)'
+  } else if (
+    /\b(docker|kubernetes|cuda|gpu|self-hosted|cluster|postgres)\b/i.test(combinedSignal) &&
+    rType !== 'Librería, framework o SDK'
+  ) {
+    integrationComplexity = 'Alta (Infraestructura / Custom)'
+  }
+
+  // 7. Para qué Proyecto Sirve (projectUseCases)
+  const useCases: string[] = []
+  if (rType === 'Skill') {
+    useCases.push('Potenciar tus agentes de programación (Claude Code, Cursor, Antigravity, Codex) con instrucciones especializadas')
+  } else if (rType === 'Servidor MCP o conector') {
+    useCases.push('Conectar herramientas externas, datos en vivo o automatización a tu agente mediante Model Context Protocol (MCP)')
+  } else if (rType === 'Agente o workflow') {
+    useCases.push('Construir sistemas multi-agente autónomos, pipelines de investigación o automatización de tareas complejas')
+  } else if (areaCategory === 'Voz, Audio, Video & Multimodal') {
+    useCases.push('Proyectos de generación de voz/TTS, transcripción en tiempo real, edición programática de video o avatares IA')
+  } else if (areaCategory === 'Datos, RAG, Memoria & Scraping') {
+    useCases.push('Sistemas RAG (“Segundo Cerebro”), extracción estructurada de sitios web para LLMs o memoria persistente de agentes')
+  } else if (areaCategory === 'Frontend, UI, Shaders & Diseño') {
+    useCases.push('Interfaces web modernas en Next.js/React, dashboards interactivos, efectos visuales o sistemas de diseño')
+  } else if (areaCategory === 'Automatización, Browser & Bots') {
+    useCases.push('Agentes que navegan la web automáticamente, bots de WhatsApp/Telegram o flujos de trabajo sin intervención humana')
+  } else if (areaCategory === 'Educación, Roadmaps & Guías Técnicas') {
+    useCases.push('Base de conocimiento, referencia de arquitectura de sistemas y capacitación en ingeniería de IA')
+  } else {
+    useCases.push(`Integrar como ${rType.toLowerCase()} en proyectos de ${areaCategory.toLowerCase()}`)
+  }
+
+  if (nameLower.includes('awesome')) {
+    useCases.unshift('Explorar y descubrir decenas de herramientas curadas del ecosistema para elegir tu stack')
+  }
+
+  const projectUseCases = useCases.join('; ')
+
+  // 8. Estado de Verificación y Fuentes
+  const platforms = new Set<string>()
+  for (const b of nonSyntheticBms) {
+    if (b.platform === 'x') platforms.add('X/Twitter')
+    else if (b.platform === 'whatsapp') platforms.add('WhatsApp')
+    else if (b.platform === 'instagram') platforms.add('Instagram')
+  }
+  if (platforms.size === 0) {
+    platforms.add('Catálogo / Lista GitHub')
+  }
+  if ((repo.notes || '').toLowerCase().includes('cazador') || (repo.notes || '').toLowerCase().includes('hunter')) {
+    platforms.add('Cazador Profundo')
+  }
+
+  const verificationStatusLabel =
+    stars > 0 || (repo.readme && repo.readme.length > 50)
+      ? 'Verificado con GitHub API (Métricas en vivo)'
+      : nonSyntheticBms.length > 0
+      ? 'Confirmado en tus Guardados (Listo para enriquecer)'
+      : 'Registrado en Catálogo Local'
+
+  return {
+    whatIsItEs,
+    areaCategory,
+    companyOrAuthor,
+    creatorKind,
+    atlasScore,
+    atlasScoreLabel,
+    securityGrade,
+    securitySummary,
+    projectUseCases,
+    maturityLevel,
+    integrationComplexity,
+    licenseSummary,
+    verificationStatusLabel,
+    sourcesSummary: Array.from(platforms).join(' + ')
+  }
+}
+
+/**
+ * Super-Extractor of GitHub Repositories from:
+ * - Any raw text / Markdown / CSV / JSON / shorthand `owner/repo` list
+ * - A GitHub Awesome List repository URL (`https://github.com/owner/awesome-...`) by fetching its README
+ * - Any external web page / blog / documentation URL that lists GitHub repositories
+ */
+export async function extractRepositoriesFromAnyListOrPage(params: {
+  text?: string
+  pageUrl?: string
+  token?: string | null
+}): Promise<{
+  extracted: ExtractedRepoUrl[]
+  sourceLabel: string
+}> {
+  const combinedMap = new Map<string, ExtractedRepoUrl>()
+  let sourceLabel = 'Lista de texto'
+
+  const addExtracted = (list: ExtractedRepoUrl[]) => {
+    for (const item of list) {
+      const key = `${item.owner.toLowerCase()}/${item.repo.toLowerCase()}`
+      const existing = combinedMap.get(key)
+      if (!existing || (!existing.contextHint && item.contextHint)) {
+        combinedMap.set(key, item)
+      }
+    }
+  }
+
+  if (params.text && params.text.trim()) {
+    addExtracted(extractGitHubUrlsFromText(params.text, true))
+  }
+
+  const rawPageUrl = (params.pageUrl || '').trim()
+  if (rawPageUrl) {
+    sourceLabel = rawPageUrl
+    const parsedGh = parseGitHubUrl(rawPageUrl)
+    if (parsedGh) {
+      // It's a GitHub repo URL (e.g. an Awesome list like punkpeye/awesome-mcp-servers!)
+      // Fetch its README and extract all repositories referenced inside it!
+      const readme = await fetchRepositoryReadme(parsedGh.owner, parsedGh.repo, params.token)
+      if (readme) {
+        sourceLabel = `Awesome List / README (${parsedGh.owner}/${parsedGh.repo})`
+        addExtracted(extractGitHubUrlsFromText(readme, false))
+      }
+      // Also include the repo itself if it wasn't just a container, or keep it at the top
+      addExtracted([
+        {
+          owner: parsedGh.owner,
+          repo: parsedGh.repo,
+          cleanUrl: `https://github.com/${parsedGh.owner}/${parsedGh.repo}`,
+          originalMatch: rawPageUrl,
+          contextHint: `Repositorio contenedor / Lista principal (${parsedGh.owner}/${parsedGh.repo})`
+        }
+      ])
+    } else if (/^https?:\/\//i.test(rawPageUrl)) {
+      try {
+        const res = await fetch(rawPageUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            Accept: 'text/html,text/plain,text/markdown,*/*'
+          },
+          signal: AbortSignal.timeout(10000)
+        })
+        if (res.ok) {
+          const bodyText = (await res.text()).slice(0, 250000)
+          addExtracted(extractGitHubUrlsFromText(bodyText, false))
+        }
+      } catch {
+        // Fallback to extracting from the URL string itself
+      }
+    }
+  }
+
+  return {
+    extracted: Array.from(combinedMap.values()),
+    sourceLabel
+  }
+}
+
 

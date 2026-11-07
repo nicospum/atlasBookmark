@@ -70,8 +70,9 @@ export function ExportView({ items }: ExportViewProps) {
       if (onlyReviewed && !i.reviewed) return false
       if (onlyWithGitHub) {
         const hasGh =
-          (i.resources || []).some(r => Boolean(r.githubRepo)) ||
-          i.expandedUrls.some(u => u.toLowerCase().includes('github.com/'))
+          i.platform === 'github' ||
+          (i.resources || []).some(r => r.kind === 'github_repo') ||
+          (i.outgoingLinks || []).some(u => u.toLowerCase().includes('github.com/'))
         if (!hasGh) return false
       }
       return true
@@ -163,15 +164,48 @@ export function ExportView({ items }: ExportViewProps) {
           </p>
         </div>
 
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleServerExport}
-          className="border-[#35314f] bg-[#1a1b26] text-xs text-[#bfb8ff] hover:bg-[#252438]"
-        >
-          <Server className="mr-1.5 size-3.5" /> Guardar y descargar desde servidor (/exports)
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            onClick={() => window.open('/api/export/xlsx?mode=repositories', '_blank')}
+            className="bg-emerald-600 text-xs text-white hover:bg-emerald-500 shadow-sm"
+          >
+            <FileSpreadsheet className="mr-1.5 size-3.5" /> 📊 Descargar Excel Maestro de Repositorios (.xlsx)
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleServerExport}
+            className="border-[#35314f] bg-[#1a1b26] text-xs text-[#bfb8ff] hover:bg-[#252438]"
+          >
+            <Server className="mr-1.5 size-3.5" /> Guardar y descargar Guardados (/exports)
+          </Button>
+        </div>
       </header>
+
+      {/* Banner Destacado: Excel Maestro de Repositorios y Herramientas Clasificado por Agente */}
+      <div className="flex flex-col justify-between gap-4 rounded-xl border border-emerald-500/35 bg-[#121e1b] p-4 sm:flex-row sm:items-center">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <Badge className="bg-emerald-600/30 text-emerald-300 border-emerald-500/40 text-[10px]">
+              Clasificado por Agente (21 Columnas · 5 Pestañas)
+            </Badge>
+            <span className="text-sm font-semibold text-white">
+              Catálogo Maestro de Repositorios GitHub, Skills, MCPs y Herramientas IA
+            </span>
+          </div>
+          <p className="text-xs text-zinc-300">
+            Incluye para cada repositorio: <strong>Qué es y para qué sirve</strong>, <strong>Área / Categoría</strong>, <strong>Empresa u Organización creadora</strong>, <strong>Estrellas</strong>, <strong>Puntaje Atlas (1-10)</strong>, <strong>Grado de Seguridad y Permisos</strong>, <strong>Para qué Proyecto Sirve</strong>, <strong>Madurez</strong>, <strong>Licencia</strong> y <strong>Comando de Instalación</strong>.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          onClick={() => window.open('/api/export/xlsx?mode=repositories', '_blank')}
+          className="bg-emerald-600 text-xs text-white hover:bg-emerald-500 shrink-0"
+        >
+          <CloudDownload className="mr-1.5 size-4" /> Exportar Excel de Repositorios (.xlsx)
+        </Button>
+      </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.25fr_1fr]">
         {/* Configuración */}

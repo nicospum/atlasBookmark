@@ -274,6 +274,53 @@ export interface GalleryRepository {
   linkedBookmarkIds?: string[]
   notes?: string
   customOrder?: number
+  agentEvaluation?: RepoAgentEvaluation
+}
+
+export interface RepoAgentEvaluation {
+  /** Qué es y para qué sirve en español claro */
+  whatIsItEs: string
+  /** Área o dominio principal (ej. Agentes Autónomos & MCP, IA Generativa & LLMs, Video & Voz...) */
+  areaCategory: string
+  /** Empresa, laboratorio u organización creadora (ej. Anthropic, Microsoft, Google, Comunidad @owner) */
+  companyOrAuthor: string
+  /** Tipo de creador: oficial de empresa/org reconocida o independiente */
+  creatorKind: 'Empresa / Laboratorio Oficial' | 'Organización Open Source' | 'Autor / Comunidad Independiente'
+  /** Puntaje numérico calculado por el agente (1.0 a 10.0) */
+  atlasScore: number
+  /** Etiqueta formateada del puntaje (ej. "9.4 / 10 (Sobresaliente)") */
+  atlasScoreLabel: string
+  /** Grado de seguridad y confianza */
+  securityGrade: 'Alto' | 'Medio' | 'Precaución'
+  /** Explicación de seguridad (licencia, ejecución local/red, organización verificada) */
+  securitySummary: string
+  /** Para qué proyecto o caso de uso sirve concretamente */
+  projectUseCases: string
+  /** Nivel de madurez y tracción */
+  maturityLevel: 'Producción / Consolidado' | 'En crecimiento activo' | 'Experimental / Reciente' | 'Referencia en guardados'
+  /** Complejidad de integración en proyectos propios */
+  integrationComplexity: 'Baja (Plug & Play / 1-Clic)' | 'Media (Configuración estándar)' | 'Alta (Infraestructura / Custom)'
+  /** Evaluación comercial de la licencia */
+  licenseSummary: string
+  /** Estado de verificación de los datos */
+  verificationStatusLabel: string
+  /** Fuentes donde apareció (X, WhatsApp, Instagram, Lista GitHub, Cazador) */
+  sourcesSummary: string
+}
+
+export interface DeepHuntResultItem {
+  bookmarkId: string
+  bookmarkTitle: string
+  platform: SourcePlatform
+  sourceUrl: string
+  discoveredRepos: Array<{
+    fullName: string
+    url: string
+    description: string
+    stars?: number
+    discoveryMethod: 'tweet_hydration' | 'reply_or_thread' | 'external_page_scrape' | 'github_search_inference' | 'shortlink_expansion'
+    confidence: 'confirmado' | 'probable'
+  }>
 }
 
 export type ActivityFilterType =

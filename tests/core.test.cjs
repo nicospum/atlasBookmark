@@ -665,6 +665,81 @@ test('1-Click install snippets, MCP config JSON, side-by-side comparator, shorte
   assert.equal(deleteProjectBlueprint('bp-test-stack'), true)
 })
 
+test('Agent Classifier, Master Excel Workbook & Super-Importer with Deduplication', async () => {
+  const {
+    evaluateAndClassifyRepository
+  } = require('../lib/github-gallery.ts')
+  const {
+    buildRepositoriesWorkbook,
+    REPO_MASTER_EXCEL_COLUMNS
+  } = require('../lib/excel-export.ts')
+  const {
+    importRepositoryListWithDeduplication
+  } = require('../lib/bookmarks-repository.ts')
+
+  // 1. Shorthand & mixed list extraction
+  const mixedList = [
+    '# Mi lista de repositorios clave',
+    'https://github.com/anthropics/skills - Skills oficiales de Claude',
+    'modelcontextprotocol/servers - Servidores MCP oficiales',
+    '- browser-use/browser-use: Agente que controla el navegador',
+    'src/components/button.tsx' // should be ignored as file path
+  ].join('\n')
+
+  const extracted = extractGitHubUrlsFromText(mixedList, true)
+  const fullNames = extracted.map(e => `${e.owner}/${e.repo}`)
+  assert.ok(fullNames.includes('anthropics/skills'))
+  assert.ok(fullNames.includes('modelcontextprotocol/servers'))
+  assert.ok(fullNames.includes('browser-use/browser-use'))
+  assert.ok(!fullNames.some(n => n.startsWith('src/')))
+
+  // 2. Super-Importer with strict deduplication
+  const firstRun = await importRepositoryListWithDeduplication({
+    text: mixedList,
+    enrichLiveCount: 0
+  })
+  assert.equal(firstRun.totalDetected, 3)
+
+  // Second run with the same list + 1 new repo should skip the 3 existing and only add the 1 new
+  const secondRun = await importRepositoryListWithDeduplication({
+    text: `${mixedList}\nvercel/ai - AI SDK de Vercel`,
+    enrichLiveCount: 0
+  })
+  assert.equal(secondRun.totalDetected, 4)
+  assert.equal(secondRun.added, 1)
+  assert.equal(secondRun.duplicatesSkipped, 3)
+  assert.ok(secondRun.addedFullNames.includes('vercel/ai'))
+
+  // 3. Agent Classifier & Evaluation
+  const allRepos = getAllGalleryRepositories()
+  const anthropicRepo = allRepos.find(r => r.fullName.toLowerCase() === 'anthropics/skills')
+  assert.ok(anthropicRepo)
+  const evaluation = evaluateAndClassifyRepository(
+    { ...anthropicRepo, stars: 12500, license: 'MIT' },
+    getAllBookmarks()
+  )
+  assert.equal(evaluation.companyOrAuthor, 'Anthropic (Oficial)')
+  assert.equal(evaluation.areaCategory, 'Agentes Autónomos, Skills & MCP')
+  assert.equal(evaluation.securityGrade, 'Alto')
+  assert.ok(evaluation.atlasScore >= 8.5)
+  assert.ok(evaluation.projectUseCases.length > 20)
+
+  // 4. Master Repositories Excel Workbook (5 sheets & 21 columns)
+  const wb = buildRepositoriesWorkbook(allRepos, getAllBookmarks())
+  assert.deepEqual(wb.SheetNames, [
+    'Catálogo Maestro',
+    'Skills, MCPs y Agentes',
+    'Por Área y Proyecto',
+    'Top Puntaje y Seguridad',
+    'Resumen Ejecutivo'
+  ])
+  const masterRows = XLSX.utils.sheet_to_json(wb.Sheets['Catálogo Maestro'])
+  assert.ok(masterRows.length >= 4)
+  for (const col of REPO_MASTER_EXCEL_COLUMNS) {
+    assert.ok(col in masterRows[0], `Missing column in Master Excel: ${col}`)
+  }
+})
+
 after(() => {
   try {
     db.close()
