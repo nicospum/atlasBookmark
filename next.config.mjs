@@ -6,6 +6,10 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  outputFileTracingIncludes: {
+    '/api/**/*': ['./data/atlas.db', './data/topic_rules.json', './data/normalized/archive.json'],
+    '/': ['./data/atlas.db', './data/topic_rules.json', './data/normalized/archive.json'],
+  },
 }
 
 export default nextConfig

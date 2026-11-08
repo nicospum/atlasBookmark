@@ -41,6 +41,15 @@ function ensureWritableDataDir(): string {
     fs.mkdirSync(tmpDir, { recursive: true })
     fs.mkdirSync(path.join(tmpDir, 'normalized'), { recursive: true })
 
+    // Seed atlas.db from bundled data dir on Vercel / Netlify serverless cold start
+    const bundledDb = path.join(BUNDLED_DATA_DIR, 'atlas.db')
+    const tmpDb = path.join(tmpDir, 'atlas.db')
+    if (fs.existsSync(bundledDb) && !fs.existsSync(tmpDb)) {
+      try {
+        fs.copyFileSync(bundledDb, tmpDb)
+      } catch {}
+    }
+
     // Seed archive.json and topic_rules.json from bundled data dir if available
     const bundledArchive = path.join(BUNDLED_DATA_DIR, 'normalized', 'archive.json')
     const tmpArchive = path.join(tmpDir, 'normalized', 'archive.json')
