@@ -1,14 +1,39 @@
 {
   "manifest_version": 3,
-  "name": "Atlas de Guardados & Galería GitHub · Captura Local",
-  "version": "2.0.0",
-  "description": "Guarda repositorios de GitHub en 1 clic y captura guardados de X e Instagram directo en tu base local de Atlas (localhost:3000 / 3070).",
+  "name": "Atlas de Guardados & Galería GitHub · Captura Multi-Plataforma v3.0",
+  "version": "3.0.0",
+  "description": "v3.0: Captura guardados de X e Instagram, extrae links de chats de WhatsApp Web y escanea listas de repositorios GitHub en YouTube o cualquier web en 1 clic hacia Atlas (localhost:3000 / 3070).",
   "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
   "host_permissions": [
     "http://localhost:3000/*",
     "http://127.0.0.1:3000/*",
     "http://localhost:3070/*",
-    "http://127.0.0.1:3070/*"
+    "http://127.0.0.1:3070/*",
+    "https://web.whatsapp.com/*",
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://github.com/*",
+    "https://x.com/*",
+    "https://twitter.com/*",
+    "https://www.instagram.com/*"
   ],
-  "action": { "default_popup": "popup.html", "default_title": "Atlas de Guardados & GitHub" }
+  "content_scripts": [
+    {
+      "matches": [
+        "https://web.whatsapp.com/*",
+        "https://www.youtube.com/*",
+        "https://youtube.com/*",
+        "https://github.com/*",
+        "https://x.com/*",
+        "https://twitter.com/*",
+        "https://www.instagram.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Atlas de Guardados & GitHub v3.0"
+  }
 }

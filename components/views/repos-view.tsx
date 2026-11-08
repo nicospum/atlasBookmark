@@ -40,7 +40,13 @@ import {
   Layers,
   Columns,
   Pause,
-  Link2
+  Link2,
+  ShieldCheck,
+  ShieldAlert,
+  Radio,
+  Cloud,
+  Rocket,
+  Cpu
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -57,10 +63,14 @@ import type {
   DiscoverCategory,
   GalleryRepository,
   InstallSnippetInfo,
+  LocalInstallResult,
   ProjectBlueprint,
   RateLimitInfo,
+  ReleaseRadarItem,
+  RepoSecurityAuditResult,
   RepoSortByType,
-  ResourceType
+  ResourceType,
+  StackRecommendationResult
 } from '@/lib/types'
 
 interface ReposViewProps {
@@ -381,7 +391,7 @@ export function ReposView({
 }: ReposViewProps) {
   const [repositories, setRepositories] = useState<GalleryRepository[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [activeSubTab, setActiveSubTab] = useState<'gallery' | 'discover' | 'blueprints'>('gallery')
+  const [activeSubTab, setActiveSubTab] = useState<'gallery' | 'discover' | 'blueprints' | 'radar'>('gallery')
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid')
 
   // Search & filters
@@ -389,10 +399,40 @@ export function ReposView({
   const [selectedResourceType, setSelectedResourceType] = useState<string>('all')
   const [selectedLanguage, setSelectedLanguage] = useState<string>('')
   const [selectedTopic, setSelectedTopic] = useState<string>('')
+  const [selectedArea, setSelectedArea] = useState<string>('')
+  const [selectedSecurityGrade, setSelectedSecurityGrade] = useState<'all' | 'Alto' | 'Medio' | 'Precaución'>('all')
   const [selectedActivity, setSelectedActivity] = useState<ActivityFilterType>('ALL')
   const [selectedCreatedAt, setSelectedCreatedAt] = useState<CreatedAtFilterType>('ALL')
   const [originFilter, setOriginFilter] = useState<'all' | 'from_bookmarks' | 'direct'>('all')
   const [sortBy, setSortBy] = useState<RepoSortByType>('bookmarks_desc')
+  const [visibleCount, setVisibleCount] = useState<number>(36)
+
+  // SSE Live Deep Hunter Stream (#2)
+  const [huntStreamStatus, setHuntStreamStatus] = useState<{
+    current?: number
+    total?: number
+    authorHandle?: string
+    platform?: string
+    discoveredReposCount?: number
+    message?: string
+  } | null>(null)
+
+  // Security Audit (#6) & 1-Click Local Installer (#7)
+  const [securityAuditByRepo, setSecurityAuditByRepo] = useState<Record<string, RepoSecurityAuditResult>>({})
+  const [isAuditingSecurity, setIsAuditingSecurity] = useState(false)
+  const [localInstallResultByRepo, setLocalInstallResultByRepo] = useState<Record<string, LocalInstallResult>>({})
+  const [isInstallingLocal, setIsInstallingLocal] = useState(false)
+
+  // Stack Recommender (#8) & Release Radar (#10)
+  const [stackIdeaInput, setStackIdeaInput] = useState('')
+  const [isRecommendingStack, setIsRecommendingStack] = useState(false)
+  const [stackRecommendation, setStackRecommendation] = useState<StackRecommendationResult | null>(null)
+  const [radarItems, setRadarItems] = useState<ReleaseRadarItem[]>([])
+  const [isRadarLoading, setIsRadarLoading] = useState(false)
+
+  // Cloud Gist Sync (#5)
+  const [gistIdInput, setGistIdInput] = useState('')
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false)
 
   // Multi-selection & 1-click command copy
   const [selectedRepoKeys, setSelectedRepoKeys] = useState<Set<string>>(new Set())
@@ -490,13 +530,15 @@ export function ReposView({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Load token and AI provider preference from localStorage
+  // Load token, AI provider preference and Gist ID from localStorage
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const savedTok = localStorage.getItem('atlas_github_pat') || ''
       const savedProv = (localStorage.getItem('atlas_ai_provider') as AiProviderId) || 'gemini'
+      const savedGist = localStorage.getItem('atlas_gist_id') || ''
       setGithubToken(savedTok)
       setSelectedAiProvider(savedProv)
+      setGistIdInput(savedGist)
     }
   }, [])
 
@@ -618,6 +660,17 @@ export function ReposView({
       .map(([name]) => name)
   }, [repositories])
 
+  const availableAreas = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const r of repositories) {
+      const area = r.agentEvaluation?.areaCategory
+      if (area) counts.set(area, (counts.get(area) || 0) + 1)
+    }
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name)
+  }, [repositories])
+
   // Filtered and sorted repositories
   const filteredRepositories = useMemo(() => {
     const rawQ = searchQuery.trim().toLowerCase()
@@ -632,6 +685,12 @@ export function ReposView({
           return false
         }
         if (selectedTopic && !(repo.topics || []).includes(selectedTopic)) {
+          return false
+        }
+        if (selectedArea && repo.agentEvaluation?.areaCategory !== selectedArea) {
+          return false
+        }
+        if (selectedSecurityGrade !== 'all' && repo.agentEvaluation?.securityGrade !== selectedSecurityGrade) {
           return false
         }
         if (originFilter === 'from_bookmarks') {
@@ -670,6 +729,9 @@ export function ReposView({
             repo.resourceType || '',
             repo.primaryLanguage || '',
             repo.notes || '',
+            repo.agentEvaluation?.areaCategory || '',
+            repo.agentEvaluation?.companyOrAuthor || '',
+            repo.agentEvaluation?.projectUseCases || '',
             ...(repo.topics || [])
           ]
             .join(' ')
@@ -685,6 +747,11 @@ export function ReposView({
         return true
       })
       .sort((a, b) => {
+        if (sortBy === 'score_desc') {
+          const sDiff = (b.agentEvaluation?.atlasScore || 0) - (a.agentEvaluation?.atlasScore || 0)
+          if (sDiff !== 0) return sDiff
+          return (b.stars || 0) - (a.stars || 0)
+        }
         if (sortBy === 'bookmarks_desc') {
           const bCount = (b.linkedBookmarkIds || []).length - (a.linkedBookmarkIds || []).length
           if (bCount !== 0) return bCount
@@ -713,11 +780,34 @@ export function ReposView({
     selectedResourceType,
     selectedLanguage,
     selectedTopic,
+    selectedArea,
+    selectedSecurityGrade,
     originFilter,
     selectedActivity,
     selectedCreatedAt,
     sortBy
   ])
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setVisibleCount(36)
+  }, [
+    searchQuery,
+    selectedResourceType,
+    selectedLanguage,
+    selectedTopic,
+    selectedArea,
+    selectedSecurityGrade,
+    originFilter,
+    selectedActivity,
+    selectedCreatedAt,
+    sortBy
+  ])
+
+  const paginatedRepositories = useMemo(
+    () => filteredRepositories.slice(0, visibleCount),
+    [filteredRepositories, visibleCount]
+  )
 
   // KPI metrics
   const kpis = useMemo(() => {
@@ -1444,12 +1534,74 @@ export function ReposView({
   const handleHuntMissingRepos = async () => {
     if (isHuntingMissingRepos) return
     setIsHuntingMissingRepos(true)
+    setHuntStreamStatus({
+      current: 0,
+      total: 24,
+      message: 'Iniciando rastreo profundo SSE en guardados sin repositorio directo...'
+    })
     setStatusBanner({
       type: 'info',
-      text: '🕵️ Cazador Profundo activo: hidratando links de WhatsApp/X, inspeccionando hilos/páginas y buscando repositorios mencionados en videos/posts...'
+      text: '🕵️ Cazador Profundo activo (Streaming SSE): hidratando links de WhatsApp/X, inspeccionando hilos y buscando repositorios mencionados en videos/posts...'
     })
     try {
-      const res = await fetch('/api/github/repos', {
+      const res = await fetch('/api/github/hunt-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          limit: 24,
+          token: githubToken.trim() || undefined
+        })
+      })
+      if (res.ok && res.body) {
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let finalSummary: any = null
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const chunks = buffer.split('\n\n')
+          buffer = chunks.pop() || ''
+          for (const chunk of chunks) {
+            const dataLine = chunk
+              .split('\n')
+              .find(l => l.startsWith('data:'))
+            if (!dataLine) continue
+            try {
+              const payload = JSON.parse(dataLine.slice(5).trim())
+              if (payload.type === 'progress' || payload.type === 'start') {
+                setHuntStreamStatus({
+                  current: payload.scanned ?? payload.current ?? 0,
+                  total: payload.total ?? 24,
+                  discoveredReposCount: payload.discovered ?? payload.discoveredReposCount ?? 0,
+                  message:
+                    payload.latestFindings?.[0]?.discoveredRepos?.join(', ') ||
+                    `Escaneados ${payload.scanned ?? 0}/${payload.total ?? 24} guardados · ${
+                      payload.discovered ?? 0
+                    } repositorios descubiertos`
+                })
+              } else if (payload.type === 'done') {
+                finalSummary = payload.summary || payload
+              }
+            } catch {}
+          }
+        }
+
+        await fetchRepositories()
+        await onRefreshBookmarks()
+        if (finalSummary) {
+          setStatusBanner({
+            type: 'ok',
+            text: `🕵️ Cazador Profundo SSE completado: se escanearon ${finalSummary.scannedCount ?? 0} guardados, se hidrataron ${finalSummary.hydratedPostsCount ?? 0} posts de WhatsApp/X y se descubrieron ${finalSummary.discoveredReposCount ?? 0} repositorios ocultos (${finalSummary.newGalleryReposCount ?? 0} nuevos en Galería).`
+          })
+        }
+        return
+      }
+
+      // Fallback al endpoint clásico JSON si SSE no está disponible
+      const fallbackRes = await fetch('/api/github/repos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1458,18 +1610,13 @@ export function ReposView({
           token: githubToken.trim() || undefined
         })
       })
-      const data = await res.json()
-      if (res.ok && data.success) {
+      const data = await fallbackRes.json()
+      if (fallbackRes.ok && data.success) {
         await fetchRepositories()
         await onRefreshBookmarks()
         setStatusBanner({
           type: 'ok',
           text: `🕵️ Cazador Profundo completado: se escanearon ${data.scannedCount} guardados sin repo directo, se hidrataron ${data.hydratedPostsCount} posts de WhatsApp/X y se descubrieron ${data.discoveredReposCount} repositorios ocultos (${data.newGalleryReposCount} nuevos en Galería).`
-        })
-      } else {
-        setStatusBanner({
-          type: 'error',
-          text: data.error || 'No se pudo completar el rastreo profundo.'
         })
       }
     } catch {
@@ -1479,6 +1626,179 @@ export function ReposView({
       })
     } finally {
       setIsHuntingMissingRepos(false)
+      setHuntStreamStatus(null)
+    }
+  }
+
+  // #6: Auditar Seguridad y Permisos profundos del repositorio
+  const handleAuditRepoSecurity = async (repo: GalleryRepository) => {
+    setIsAuditingSecurity(true)
+    try {
+      const res = await fetch('/api/github/install-local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          installMode: 'audit',
+          fullName: repo.fullName,
+          repository: repo,
+          token: githubToken.trim() || undefined
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.audit) {
+        setSecurityAuditByRepo(prev => ({
+          ...prev,
+          [repo.fullName.toLowerCase()]: data.audit
+        }))
+      }
+    } catch {} finally {
+      setIsAuditingSecurity(false)
+    }
+  }
+
+  // #7: Instalar Skill o registrar Servidor MCP en 1 clic en la PC local
+  const handleInstallRepoLocal = async (
+    repo: GalleryRepository,
+    installMode: 'skill_clone' | 'mcp_config' | 'repo_clone'
+  ) => {
+    setIsInstallingLocal(true)
+    try {
+      const res = await fetch('/api/github/install-local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          installMode,
+          fullName: repo.fullName,
+          repository: repo,
+          token: githubToken.trim() || undefined
+        })
+      })
+      const data = await res.json()
+      const installRes: LocalInstallResult = data.result || data
+      setLocalInstallResultByRepo(prev => ({
+        ...prev,
+        [repo.fullName.toLowerCase()]: installRes
+      }))
+      if (installRes.success) {
+        setStatusBanner({
+          type: 'ok',
+          text: `⚡ ${installRes.messageEs} (${installRes.targetPath})`
+        })
+      }
+    } catch (err: any) {
+      setStatusBanner({
+        type: 'error',
+        text: err.message || 'No se pudo completar la instalación local.'
+      })
+    } finally {
+      setIsInstallingLocal(false)
+    }
+  }
+
+  // #8: Recomendador de Stack Ideal a partir de una Idea de Proyecto en lenguaje natural
+  const handleRecommendStackByIdea = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+    if (!stackIdeaInput.trim() || isRecommendingStack) return
+    setIsRecommendingStack(true)
+    try {
+      const res = await fetch('/api/github/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'recommend-stack',
+          idea: stackIdeaInput.trim(),
+          maxRepos: 6,
+          autoSaveBlueprint: true,
+          provider: selectedAiProvider
+        })
+      })
+      const data = await res.json()
+      if (res.ok && data.success && data.recommendation) {
+        const rec: StackRecommendationResult = data.recommendation
+        setStackRecommendation(rec)
+        setGeneratedMasterPrompt(rec.masterPromptMarkdown || '')
+        await fetchRepositories()
+        if (rec.generatedBlueprint?.id) {
+          setActiveBlueprintId(rec.generatedBlueprint.id)
+        }
+        setStatusBanner({
+          type: 'ok',
+          text: `🚀 Stack recomendado creado: "${rec.projectName}" con ${rec.selectedRepos.length} repositorios óptimos de tu catálogo y su PROMPT_MAESTRO.md listo.`
+        })
+      }
+    } catch {} finally {
+      setIsRecommendingStack(false)
+    }
+  }
+
+  // #10: Cargar Radar de Releases y Tendencias
+  const loadReleaseRadar = useCallback(async () => {
+    setIsRadarLoading(true)
+    try {
+      const res = await fetch('/api/github/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'release-radar' })
+      })
+      const data = await res.json()
+      if (res.ok && Array.isArray(data.radarItems)) {
+        setRadarItems(data.radarItems)
+      }
+    } catch {} finally {
+      setIsRadarLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeSubTab === 'radar') {
+      loadReleaseRadar()
+    }
+  }, [activeSubTab, loadReleaseRadar])
+
+  // #5: Sincronización Cloud con GitHub Gist (Push / Pull)
+  const handleCloudGistSync = async (mode: 'push' | 'pull') => {
+    setIsSyncingCloud(true)
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'cloud-sync-gist',
+          mode,
+          gistId: gistIdInput.trim() || undefined,
+          token: githubToken.trim() || undefined
+        })
+      })
+      const data = await res.json()
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'No se pudo sincronizar con GitHub Gist.')
+      }
+      if (data.gistId) {
+        setGistIdInput(data.gistId)
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('atlas_gist_id', data.gistId)
+        }
+      }
+      if (mode === 'pull') {
+        await fetchRepositories()
+        await onRefreshBookmarks()
+        setStatusBanner({
+          type: 'ok',
+          text: `☁️ Catálogo restaurado desde GitHub Gist (${data.counts?.repositories || 0} repositorios y ${data.counts?.bookmarks || 0} guardados).`
+        })
+      } else {
+        setStatusBanner({
+          type: 'ok',
+          text: `☁️ Respaldo sincronizado en GitHub Gist (${data.gistId}): ${data.counts?.repositories || 0} repositorios y ${data.counts?.bookmarks || 0} guardados.`
+        })
+      }
+    } catch (err: any) {
+      setStatusBanner({
+        type: 'error',
+        text: err.message || 'Error al sincronizar con GitHub Gist.'
+      })
+    } finally {
+      setIsSyncingCloud(false)
     }
   }
 
@@ -1808,6 +2128,42 @@ export function ReposView({
         </div>
       )}
 
+      {/* Barra de Progreso SSE en Vivo para el Cazador Profundo de Repositorios (#2) */}
+      {isHuntingMissingRepos && huntStreamStatus && (
+        <div className="rounded-xl border border-fuchsia-500/40 bg-fuchsia-950/25 p-4 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-fuchsia-200">
+            <div className="flex items-center gap-2 font-medium">
+              <Loader2 className="size-4 animate-spin text-fuchsia-400" />
+              <span>
+                🕵️ Cazador Profundo SSE en vivo: <strong>{huntStreamStatus.current || 0}</strong> de{' '}
+                <strong>{huntStreamStatus.total || 24}</strong> guardados inspeccionados ·{' '}
+                <strong className="text-emerald-300">
+                  {huntStreamStatus.discoveredReposCount || 0} repositorios descubiertos
+                </strong>
+              </span>
+            </div>
+            {huntStreamStatus.message && (
+              <span className="text-[11px] text-fuchsia-300/90 truncate max-w-md">
+                {huntStreamStatus.message}
+              </span>
+            )}
+          </div>
+          <div className="h-2 w-full overflow-hidden rounded-full bg-black/50">
+            <div
+              className="h-full bg-fuchsia-400 transition-all duration-300"
+              style={{
+                width: `${Math.min(
+                  100,
+                  Math.round(
+                    ((huntStreamStatus.current || 1) / Math.max(1, huntStreamStatus.total || 24)) * 100
+                  )
+                )}%`
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Banner informativo */}
       {statusBanner && (
         <div
@@ -1887,6 +2243,17 @@ export function ReposView({
           >
             <Layers className="size-4" />
             <span>Armador de Proyectos & Prompts ({blueprints.length})</span>
+          </button>
+          <button
+            onClick={() => setActiveSubTab('radar')}
+            className={`flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium transition-all ${
+              activeSubTab === 'radar'
+                ? 'bg-[#7c6cf0] text-white shadow-sm'
+                : 'bg-[#161821] text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Radio className="size-4 text-emerald-400" />
+            <span>Radar de Releases & Top Puntaje</span>
           </button>
         </div>
 
@@ -2005,6 +2372,7 @@ export function ReposView({
                   onChange={e => setSortBy(e.target.value as RepoSortByType)}
                   className="rounded-lg border border-border bg-[#101218] px-2.5 py-2 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
                 >
+                  <option value="score_desc">Orden: ★ Mayor Puntaje Atlas (1-10)</option>
                   <option value="bookmarks_desc">Orden: Más guardados vinculados</option>
                   <option value="stars_desc">Orden: Más estrellas ★</option>
                   <option value="updated_desc">Orden: Última actividad</option>
@@ -2015,7 +2383,7 @@ export function ReposView({
               </div>
             </div>
 
-            {/* Segunda fila de filtros rápidos: Actividad, Fecha de lanzamiento y Topics */}
+            {/* Segunda fila de filtros rápidos: Actividad, Área, Seguridad, Fecha de lanzamiento y Topics */}
             <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-[11px] text-muted-foreground mr-1 flex items-center gap-1">
@@ -2052,6 +2420,30 @@ export function ReposView({
 
               <div className="flex flex-wrap items-center gap-2">
                 <select
+                  value={selectedArea}
+                  onChange={e => setSelectedArea(e.target.value)}
+                  className="rounded-md border border-border bg-[#101218] px-2 py-1 text-[11px] text-muted-foreground"
+                >
+                  <option value="">Área: Todas ({availableAreas.length})</option>
+                  {availableAreas.map(area => (
+                    <option key={area} value={area}>
+                      {area}
+                    </option>
+                  ))}
+                </select>
+
+                <select
+                  value={selectedSecurityGrade}
+                  onChange={e => setSelectedSecurityGrade(e.target.value as any)}
+                  className="rounded-md border border-border bg-[#101218] px-2 py-1 text-[11px] text-muted-foreground"
+                >
+                  <option value="all">🛡️ Seguridad: Todas</option>
+                  <option value="Alto">🛡️ Seguridad: Alto</option>
+                  <option value="Medio">🛡️ Seguridad: Medio</option>
+                  <option value="Precaución">⚠️ Seguridad: Precaución</option>
+                </select>
+
+                <select
                   value={selectedActivity}
                   onChange={e => setSelectedActivity(e.target.value as ActivityFilterType)}
                   className="rounded-md border border-border bg-[#101218] px-2 py-1 text-[11px] text-muted-foreground"
@@ -2080,6 +2472,8 @@ export function ReposView({
                   selectedResourceType !== 'all' ||
                   selectedLanguage ||
                   selectedTopic ||
+                  selectedArea ||
+                  selectedSecurityGrade !== 'all' ||
                   originFilter !== 'all' ||
                   selectedActivity !== 'ALL' ||
                   selectedCreatedAt !== 'ALL') && (
@@ -2089,6 +2483,8 @@ export function ReposView({
                       setSelectedResourceType('all')
                       setSelectedLanguage('')
                       setSelectedTopic('')
+                      setSelectedArea('')
+                      setSelectedSecurityGrade('all')
                       setOriginFilter('all')
                       setSelectedActivity('ALL')
                       setSelectedCreatedAt('ALL')
@@ -2121,7 +2517,7 @@ export function ReposView({
             </div>
           ) : viewMode === 'grid' ? (
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {filteredRepositories.map(repo => {
+              {paginatedRepositories.map(repo => {
                 const key = repo.fullName.toLowerCase()
                 const isSelected = selectedRepoKeys.has(key)
                 const linkedPosts = getLinkedBookmarksForRepo(repo)
@@ -2407,7 +2803,7 @@ export function ReposView({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/60">
-                  {filteredRepositories.map(repo => {
+                  {paginatedRepositories.map(repo => {
                     const key = repo.fullName.toLowerCase()
                     const isSelected = selectedRepoKeys.has(key)
                     const linkedPosts = getLinkedBookmarksForRepo(repo)
@@ -2517,6 +2913,35 @@ export function ReposView({
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+
+          {/* Barra de Paginación Virtualizada (#3) */}
+          {!isLoading && filteredRepositories.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-[#15171f] px-4 py-3 text-xs">
+              <span className="text-muted-foreground">
+                Mostrando <strong className="text-foreground">{paginatedRepositories.length}</strong> de{' '}
+                <strong className="text-foreground">{filteredRepositories.length}</strong> repositorios filtrados
+              </span>
+              {visibleCount < filteredRepositories.length && (
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="xs"
+                    onClick={() => setVisibleCount(prev => Math.min(filteredRepositories.length, prev + 36))}
+                    className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] gap-1"
+                  >
+                    + Cargar 36 más
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => setVisibleCount(filteredRepositories.length)}
+                    className="border-border bg-[#101218] text-zinc-200"
+                  >
+                    Mostrar todos ({filteredRepositories.length})
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2738,7 +3163,87 @@ export function ReposView({
       {/* SUB-VISTA 3: ARMADOR DE PROYECTOS & GENERADOR DE PROMPT MAESTRO       */}
       {/* ===================================================================== */}
       {activeSubTab === 'blueprints' && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
+        <div className="space-y-5">
+          {/* Recomendador de Stack por Idea de Proyecto (#8) */}
+          <div className="rounded-xl border border-[#4c4578] bg-[#18162b] p-5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Rocket className="size-4 text-[#a59cf5]" />
+                <h3 className="text-sm font-semibold text-white">
+                  Recomendador Automático de Stack por Idea de Proyecto (IA + Catálogo Local)
+                </h3>
+              </div>
+              <Badge className="bg-[#2c274d] text-[#d6d1ff] border-[#4c4578] text-[10px]">
+                Analiza tus {repositories.length} repositorios y arma el Blueprint + PROMPT_MAESTRO.md
+              </Badge>
+            </div>
+            <form onSubmit={handleRecommendStackByIdea} className="flex flex-wrap gap-2">
+              <input
+                type="text"
+                value={stackIdeaInput}
+                onChange={e => setStackIdeaInput(e.target.value)}
+                placeholder="Contame qué querés construir (ej: 'Un agente de WhatsApp con voz, automatización de navegador y servidores MCP')..."
+                className="flex-1 min-w-[260px] rounded-lg border border-[#3e3866] bg-[#101218] px-3.5 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
+              />
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isRecommendingStack || !stackIdeaInput.trim()}
+                className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] text-xs gap-1.5"
+              >
+                {isRecommendingStack ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="size-3.5" />
+                )}
+                {isRecommendingStack ? 'Seleccionando Stack Ideal...' : '🚀 Armar Stack Ideal y Prompt'}
+              </Button>
+            </form>
+
+            {stackRecommendation && (
+              <div className="rounded-xl border border-emerald-500/30 bg-[#121922] p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h4 className="text-xs font-semibold text-emerald-300">
+                      ✨ {stackRecommendation.projectName}
+                    </h4>
+                    <p className="mt-0.5 text-xs text-zinc-200">
+                      {stackRecommendation.architectureSummaryEs}
+                    </p>
+                  </div>
+                  <Badge className="bg-emerald-950/60 text-emerald-300 border-emerald-600/40 text-[10px]">
+                    {stackRecommendation.selectedRepos.length} piezas seleccionadas
+                  </Badge>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {stackRecommendation.selectedRepos.map(item => (
+                    <div
+                      key={item.fullName}
+                      className="rounded-lg border border-white/10 bg-black/30 p-2.5 text-xs space-y-1"
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="font-semibold text-white truncate">{item.fullName}</span>
+                        <span className="text-[10px] font-medium text-emerald-300 shrink-0">
+                          ★ {item.atlasScore.toFixed(1)}
+                        </span>
+                      </div>
+                      <span className="inline-block rounded bg-[#282442] px-1.5 py-0.5 text-[10px] text-[#cfcaff]">
+                        {item.roleInStack}
+                      </span>
+                      <p className="text-[11px] text-zinc-300 line-clamp-2">{item.whySelectedEs}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <p className="text-[11px] text-cyan-200/90">
+                  🔗 <strong>Compatibilidad Técnica y Licencias:</strong> {stackRecommendation.compatibilityNotesEs}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
           {/* Columna Izquierda: Lista de Proyectos / Stacks */}
           <div className="space-y-3 lg:col-span-4">
             <div className="flex items-center justify-between rounded-xl border border-border bg-[#15171f] p-4">
@@ -3062,6 +3567,83 @@ export function ReposView({
               </div>
             ) : null}
           </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* SUB-VISTA 4: RADAR DE RELEASES, ACTIVIDAD Y TOP PUNTAJE ATLAS (#10)  */}
+      {/* ===================================================================== */}
+      {activeSubTab === 'radar' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-[#15171f] p-4">
+            <div>
+              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Radio className="size-4 text-emerald-400" />
+                Radar de Releases, Actividad Reciente y Top Puntaje Atlas
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Monitorea cuáles de tus repositorios guardados tienen actividad reciente, nuevos lanzamientos o el mayor puntaje técnico del Agente.
+              </p>
+            </div>
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={isRadarLoading}
+              onClick={loadReleaseRadar}
+              className="border-border bg-[#101218] text-xs gap-1.5"
+            >
+              <RefreshCw className={`size-3.5 ${isRadarLoading ? 'animate-spin' : ''}`} />
+              Actualizar Radar
+            </Button>
+          </div>
+
+          {isRadarLoading ? (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {[1, 2, 3, 4, 5, 6].map(n => (
+                <div key={n} className="h-36 animate-pulse rounded-xl border border-border bg-[#15171f]" />
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {radarItems.map(item => {
+                const fullRepo = repositories.find(
+                  r => r.fullName.toLowerCase() === item.fullName.toLowerCase()
+                )
+                return (
+                  <div
+                    key={item.fullName}
+                    onClick={() => fullRepo && setDetailRepo(fullRepo)}
+                    className="cursor-pointer rounded-xl border border-border bg-[#15171f] p-4 space-y-2.5 transition-all hover:border-[#7c6cf0]"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="text-xs font-semibold text-white truncate block">
+                          {item.fullName}
+                        </span>
+                        <span className="text-[11px] text-muted-foreground">
+                          🏢 {item.companyOrAuthor} · {item.areaCategory}
+                        </span>
+                      </div>
+                      <Badge className="bg-emerald-950/60 text-emerald-300 border-emerald-600/40 text-[10px] shrink-0">
+                        ★ {item.atlasScore.toFixed(1)}/10
+                      </Badge>
+                    </div>
+                    <p className="line-clamp-2 text-xs text-zinc-200">{item.shortExplanationEs}</p>
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[10px]">
+                      <span className="rounded-md border border-[#3d3863] bg-[#211e36] px-2 py-0.5 text-[#cfcaff]">
+                        📡 {item.highlightReasonEs}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {item.stars > 0 ? `★ ${formatNum(item.stars)} · ` : ''}
+                        {item.latestReleaseTag ? `Tag ${item.latestReleaseTag}` : `Hace ${item.daysSinceLastPush}d`}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -3523,6 +4105,127 @@ export function ReposView({
                         </pre>
                       </div>
                     )}
+
+                    {/* #6 & #7: Instalador Local en 1-Clic + Inspector Profundo de Seguridad */}
+                    {(() => {
+                      const repoKey = detailRepo.fullName.toLowerCase()
+                      const secAudit = securityAuditByRepo[repoKey]
+                      const installRes = localInstallResultByRepo[repoKey]
+                      return (
+                        <div className="space-y-3 border-t border-border/60 pt-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-[11px] font-medium text-zinc-300 flex items-center gap-1.5">
+                              <Cpu className="size-3.5 text-[#a59cf5]" />
+                              Acciones Directas en tu PC Local (Instalador 1-Clic & Auditoría de Seguridad):
+                            </span>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                disabled={isAuditingSecurity}
+                                onClick={() => handleAuditRepoSecurity(detailRepo)}
+                                className="border-emerald-600/40 bg-emerald-950/30 text-emerald-200 hover:bg-emerald-950/50 text-[11px] gap-1"
+                              >
+                                {isAuditingSecurity ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <ShieldCheck className="size-3.5 text-emerald-400" />
+                                )}
+                                🛡️ Auditar Seguridad y Permisos
+                              </Button>
+
+                              <Button
+                                size="xs"
+                                disabled={isInstallingLocal}
+                                onClick={() => handleInstallRepoLocal(detailRepo, 'skill_clone')}
+                                className="bg-[#7c6cf0] text-white hover:bg-[#6a5ad8] text-[11px] gap-1"
+                              >
+                                {isInstallingLocal ? (
+                                  <Loader2 className="size-3 animate-spin" />
+                                ) : (
+                                  <Download className="size-3" />
+                                )}
+                                ⚡ Clonar Skill / Repo en PC
+                              </Button>
+
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                disabled={isInstallingLocal}
+                                onClick={() => handleInstallRepoLocal(detailRepo, 'mcp_config')}
+                                className="border-cyan-600/50 bg-cyan-950/30 text-cyan-200 hover:bg-cyan-950/50 text-[11px] gap-1"
+                              >
+                                <Terminal className="size-3 text-cyan-400" />
+                                Registrar MCP en Atlas
+                              </Button>
+                            </div>
+                          </div>
+
+                          {installRes && (
+                            <div
+                              className={`rounded-lg border p-3 text-xs space-y-1 ${
+                                installRes.success
+                                  ? 'border-emerald-500/40 bg-emerald-950/30 text-emerald-200'
+                                  : 'border-amber-500/40 bg-amber-950/30 text-amber-200'
+                              }`}
+                            >
+                              <div className="font-semibold">{installRes.messageEs}</div>
+                              <div className="font-mono text-[11px] text-zinc-300">
+                                📁 Ruta local: {installRes.targetPath}
+                              </div>
+                            </div>
+                          )}
+
+                          {secAudit && (
+                            <div className="rounded-lg border border-emerald-500/30 bg-[#111921] p-3.5 text-xs space-y-2">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="font-semibold text-emerald-300 flex items-center gap-1.5">
+                                  {secAudit.riskLevel === 'Alto' ? (
+                                    <ShieldAlert className="size-4 text-amber-400" />
+                                  ) : (
+                                    <ShieldCheck className="size-4 text-emerald-400" />
+                                  )}
+                                  Dictamen del Inspector de Seguridad: Puntaje {secAudit.securityScore.toFixed(1)}/10 (Riesgo {secAudit.riskLevel})
+                                </span>
+                                {secAudit.manifestFilesFound.length > 0 && (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    Manifiestos: {secAudit.manifestFilesFound.join(', ')}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-zinc-200 leading-relaxed">{secAudit.summaryEs}</p>
+                              <div className="flex flex-wrap gap-1.5 text-[10px]">
+                                {secAudit.capabilitiesDetected.executesShellCommands && (
+                                  <Badge variant="outline" className="border-amber-600/40 text-amber-300">
+                                    ⚠️ Ejecuta Shell/Subprocesos
+                                  </Badge>
+                                )}
+                                {secAudit.capabilitiesDetected.usesBrowserAutomation && (
+                                  <Badge variant="outline" className="border-cyan-600/40 text-cyan-300">
+                                    🌐 Automatización de Navegador
+                                  </Badge>
+                                )}
+                                {secAudit.capabilitiesDetected.readsEnvSecrets && (
+                                  <Badge variant="outline" className="border-purple-600/40 text-purple-300">
+                                    🔑 Usa Variables de Entorno (.env)
+                                  </Badge>
+                                )}
+                                {secAudit.hasAutomatedTests && (
+                                  <Badge variant="outline" className="border-emerald-600/40 text-emerald-300">
+                                    ✅ Incluye Tests Automatizados
+                                  </Badge>
+                                )}
+                                {secAudit.hasSkillMd && (
+                                  <Badge variant="outline" className="border-fuchsia-600/40 text-fuchsia-300">
+                                    🧩 Incluye SKILL.md
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
                 )
               })()}
@@ -4009,6 +4712,46 @@ export function ReposView({
                   </option>
                 ))}
               </select>
+            </div>
+
+            {/* #5: Sincronización Cloud con GitHub Gist */}
+            <div className="space-y-2 rounded-xl border border-border bg-[#101218] p-3.5">
+              <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                <Cloud className="size-3.5 text-cyan-400" />
+                Sincronización Híbrida Local + Cloud (GitHub Gist)
+              </label>
+              <p className="text-[11px] text-muted-foreground">
+                Respaldá o restaurá tu catálogo completo (Repositorios, Guardados y Blueprints) en un GitHub Gist privado para sincronizar entre tu PC y despliegues en Vercel/Netlify.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  value={gistIdInput}
+                  onChange={e => setGistIdInput(e.target.value)}
+                  placeholder="Gist ID opcional (se crea uno nuevo si lo dejás vacío al subir)"
+                  className="flex-1 min-w-[200px] rounded-lg border border-border bg-[#15171f] px-3 py-1.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+                />
+                <Button
+                  type="button"
+                  size="xs"
+                  disabled={isSyncingCloud}
+                  onClick={() => handleCloudGistSync('push')}
+                  className="bg-cyan-600 text-white hover:bg-cyan-500 text-xs gap-1"
+                >
+                  {isSyncingCloud ? <Loader2 className="size-3 animate-spin" /> : <Upload className="size-3" />}
+                  Subir a Gist
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={isSyncingCloud || !gistIdInput.trim()}
+                  onClick={() => handleCloudGistSync('pull')}
+                  className="border-cyan-600/50 text-cyan-200 text-xs gap-1"
+                >
+                  <Download className="size-3" /> Restaurar de Gist
+                </Button>
+              </div>
             </div>
 
             <div className="flex justify-end gap-2 pt-2">

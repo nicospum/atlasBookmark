@@ -341,6 +341,7 @@ export type RepoSortByType =
   | 'updated'
   | 'created'
   | 'name'
+  | 'score_desc'
   | 'bookmarks_desc'
   | 'stars_desc'
   | 'updated_desc'
@@ -402,4 +403,70 @@ export interface ProjectBlueprint {
   notes: string
   createdAt: string
   updatedAt: string
+}
+
+export interface RepoSecurityAuditResult {
+  fullName: string
+  auditedAt: string
+  riskLevel: 'Bajo' | 'Medio' | 'Alto'
+  securityScore: number
+  summaryEs: string
+  manifestFilesFound: string[]
+  capabilitiesDetected: {
+    executesShellCommands: boolean
+    networkAccess: boolean
+    fileSystemWrite: boolean
+    readsEnvSecrets: boolean
+    usesBrowserAutomation: boolean
+  }
+  hasAutomatedTests: boolean
+  hasSkillMd: boolean
+  hasMcpServerConfig: boolean
+  dependenciesPreview: string[]
+  recommendationsEs: string[]
+}
+
+export interface LocalInstallResult {
+  success: boolean
+  fullName: string
+  installMode: 'skill_clone' | 'mcp_config' | 'repo_clone'
+  targetPath: string
+  messageEs: string
+  commandExecuted?: string
+}
+
+export interface StackRecommendationItem {
+  fullName: string
+  url: string
+  roleInProject: string
+  whySelectedEs: string
+  atlasScore: number
+  securityGrade: 'Alto' | 'Medio' | 'Precaución'
+  primaryLanguage: string | null
+  installCommand: string
+}
+
+export interface StackRecommendationResult {
+  projectIdea: string
+  suggestedName: string
+  architectureSummaryEs: string
+  recommendedRepos: StackRecommendationItem[]
+  compatibilityNotesEs: string[]
+  generatedBlueprint: ProjectBlueprint
+  masterPromptMarkdown: string
+}
+
+export interface ReleaseRadarItem {
+  fullName: string
+  url: string
+  avatarUrl: string
+  resourceType?: ResourceType
+  areaCategory: string
+  companyOrAuthor: string
+  stars: number
+  atlasScore: number
+  latestRelease?: GalleryRepoRelease | null
+  pushedAt: string
+  daysSincePush: number
+  highlightReasonEs: string
 }

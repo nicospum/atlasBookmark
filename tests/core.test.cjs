@@ -740,6 +740,71 @@ test('Agent Classifier, Master Excel Workbook & Super-Importer with Deduplicatio
   }
 })
 
+test('10-Point Suite: WhatsApp Consecutive Note Fusion (#4), Cloud Sync Bundle (#5), Security Inspector (#6), Stack Recommender (#8) & Release Radar (#10)', async () => {
+  const { buildCloudSyncBundle } = require('../lib/cloud-sync.ts')
+  const { auditRepositorySecurityAndHealth } = require('../lib/repo-security-scanner.ts')
+  const {
+    recommendStackForProjectIdea,
+    buildReleaseAndTrendingRadar
+  } = require('../lib/stack-recommender.ts')
+
+  // #4: WhatsApp consecutive message fusion (same sender within <= 120s)
+  const selfChat = [
+    '[08/11/2026, 10:00:05] Nico: https://github.com/browser-use/browser-use',
+    '[08/11/2026, 10:00:45] Nico: Este agente controla Chrome desde Python, ideal para mi scraper',
+    '[08/11/2026, 10:15:00] Nico: Mensaje suelto 15 minutos después sin link'
+  ].join('\n')
+
+  const parsedWa = parseWhatsAppChatText(selfChat)
+  assert.equal(parsedWa.length, 2)
+  assert.equal(parsedWa[0].hasLinks, true)
+  assert.match(parsedWa[0].text, /\[Nota WhatsApp\]: Este agente controla Chrome desde Python/)
+
+  // #5: Cloud Sync Bundle
+  const allBookmarks = getAllBookmarks()
+  const allRepos = getAllGalleryRepositories()
+  const allBlueprints = getAllProjectBlueprints()
+  const syncBundle = buildCloudSyncBundle({
+    bookmarks: allBookmarks,
+    repositories: allRepos,
+    blueprints: allBlueprints
+  })
+  assert.equal(syncBundle.version, '2.0')
+  assert.equal(syncBundle.counts.repositories, allRepos.length)
+  assert.equal(syncBundle.counts.bookmarks, allBookmarks.length)
+
+  // #6: Deep Repo Security & Health Inspector (deterministic fallback without network dependency)
+  const sampleRepo = {
+    ...allRepos[0],
+    license: 'MIT',
+    readme: '# Skill Test\nRun `npx -y @modelcontextprotocol/server` with `process.env.API_KEY` and `playwright`.\nIncludes `npm test` and `SKILL.md`.'
+  }
+  const secAudit = await auditRepositorySecurityAndHealth(sampleRepo)
+  assert.ok(secAudit.securityScore >= 1 && secAudit.securityScore <= 10)
+  assert.ok(['Bajo', 'Medio', 'Alto'].includes(secAudit.riskLevel))
+  assert.equal(secAudit.capabilitiesDetected.readsEnvSecrets, true)
+  assert.equal(secAudit.capabilitiesDetected.usesBrowserAutomation, true)
+  assert.ok(secAudit.summaryEs.length > 15)
+
+  // #8: Stack Recommender by Project Idea
+  const stackRec = await recommendStackForProjectIdea({
+    idea: 'Quiero construir un agente autónomo con navegador, skills de Claude Code y servidores MCP',
+    repos: allRepos,
+    bookmarks: allBookmarks,
+    maxRepos: 4,
+    provider: 'deterministic'
+  })
+  assert.ok(stackRec.selectedRepos.length >= 2)
+  assert.ok(stackRec.masterPromptMarkdown.includes('# PROMPT MAESTRO'))
+  assert.ok(stackRec.compatibilityNotesEs.length > 10)
+
+  // #10: Release & Trending Radar
+  const radar = buildReleaseAndTrendingRadar(allRepos, allBookmarks)
+  assert.ok(Array.isArray(radar))
+  assert.ok(radar.length >= 2)
+  assert.ok(radar[0].highlightReasonEs.length > 3)
+})
+
 after(() => {
   try {
     db.close()

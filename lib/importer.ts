@@ -690,7 +690,11 @@ export function sanitizeWhatsAppSender(rawSender: string): string {
  * - [hh:mm, d/m/yyyy] Author: Message (WhatsApp Web copy-paste)
  * - Free-form lines or blocks with URLs
  */
-export function parseWhatsAppChatText(text: string): WhatsAppParsedMessage[] {
+export function parseWhatsAppChatText(
+  text: string,
+  options?: { mergeConsecutiveNotes?: boolean }
+): WhatsAppParsedMessage[] {
+  const mergeConsecutiveNotes = options?.mergeConsecutiveNotes !== false
   const clean = (text || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').trim()
   if (!clean) return []
 
@@ -758,15 +762,20 @@ export function parseWhatsAppChatText(text: string): WhatsAppParsedMessage[] {
     // Parse dd/mm/yyyy date if possible
     let isoDate = new Date().toISOString()
     if (msg.dateStr) {
-      const dm = msg.dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/)
+      const dm = msg.dateStr.match(
+        /^(\d{1,2})\/(\d{1,2})\/(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*([APap]\.?\s*[Mm]\.?))?/
+      )
       if (dm) {
         const day = Number(dm[1])
         const month = Number(dm[2])
         let year = Number(dm[3])
         if (year < 100) year += 2000
-        const hour = Number(dm[4])
+        let hour = Number(dm[4])
         const minute = Number(dm[5])
         const second = Number(dm[6] || 0)
+        const ampm = (dm[7] || '').replace(/\./g, '').replace(/\s+/g, '').toUpperCase()
+        if (ampm === 'PM' && hour < 12) hour += 12
+        if (ampm === 'AM' && hour === 12) hour = 0
         const d = new Date(Date.UTC(year, Math.max(0, month - 1), day, hour, minute, second))
         if (Number.isFinite(d.getTime())) {
           isoDate = d.toISOString()
@@ -775,6 +784,27 @@ export function parseWhatsAppChatText(text: string): WhatsAppParsedMessage[] {
     }
 
     const sender = sanitizeWhatsAppSender(msg.sender)
+
+    // Temporal fusion of consecutive WhatsApp self-chat messages:
+    // If a follow-up message has no links of its own, is from the same sender as the immediately
+    // preceding message (which has links), and arrives within 120 seconds (or same timestamp),
+    // merge it into the preceding message's text as `[Nota WhatsApp]: ...`.
+    if (mergeConsecutiveNotes && urls.length === 0 && results.length > 0) {
+      const prev = results[results.length - 1]
+      if (prev.sender === sender && prev.hasLinks) {
+        const prevMs = Date.parse(prev.timestamp)
+        const currMs = Date.parse(isoDate)
+        const diffSec =
+          Number.isFinite(prevMs) && Number.isFinite(currMs)
+            ? Math.abs(currMs - prevMs) / 1000
+            : Infinity
+        if (diffSec <= 120 || prev.timestamp === isoDate) {
+          prev.text = `${prev.text}\n[Nota WhatsApp]: ${body}`
+          continue
+        }
+      }
+    }
+
     const hash = createHash('sha256').update(`whatsapp:${sender}:${body}`).digest('hex').slice(0, 16)
     const id = `whatsapp:${hash}`
     if (seenIds.has(id)) continue

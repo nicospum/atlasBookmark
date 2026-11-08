@@ -1,1 +1,55 @@
-<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Atlas · Captura & GitHub</title><link rel="stylesheet" href="popup.css"></head><body><h1>Atlas de Guardados & GitHub</h1><p>Captura local desde la pestaña abierta. No lee contraseñas ni cookies.</p><p class="hint">En GitHub: guardá cualquier repositorio en 1 clic. En X o Instagram: capturá tus guardados con auto-scroll.</p><button id="save-github">⚡ Guardar este Repositorio GitHub en Atlas (1-Clic)</button><button id="start">Iniciar / reanudar captura (X / Instagram)</button><button id="stop">Pausar y guardar checkpoint</button><button id="sync">Sincronizar directo con Atlas (localhost:3000)</button><button id="download">Descargar JSON capturado</button><button id="reset">Nueva captura (borra checkpoint)</button><pre id="status" aria-live="polite">Abrí un repo en GitHub o tus guardados en X/Instagram.</pre><p class="hint">Sincroniza automáticamente con Atlas en localhost:3000 (o 3070).</p><script src="popup.js"></script></body></html>
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <title>Atlas · Captura Multi-Plataforma v3.0</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <h1>Atlas de Guardados &amp; GitHub <span class="badge">v3.0</span></h1>
+    <p class="subtitle">
+      Captura local desde la pestaña abierta. No lee contraseñas ni cookies.
+    </p>
+
+    <section class="group">
+      <h2>GitHub · YouTube · Awesome Lists</h2>
+      <button id="save-github" class="primary">
+        ⚡ Guardar este Repositorio GitHub en Atlas (1-Clic)
+      </button>
+      <button id="scan-page-repos">
+        🔍 Escanear repos GitHub en esta página / YouTube
+      </button>
+      <button id="import-page-repos" class="accent">
+        🚀 Importar todos los repos de la página en 1-Clic
+      </button>
+    </section>
+
+    <section class="group">
+      <h2>WhatsApp Web (Links del Chat Activo)</h2>
+      <button id="extract-whatsapp">
+        💬 Extraer mensajes con links de WhatsApp Web
+      </button>
+      <button id="import-whatsapp" class="emerald">
+        📥 Enviar links de WhatsApp a Atlas (1-Clic)
+      </button>
+      <button id="download-whatsapp">
+        📄 Descargar links de WhatsApp (.txt / .json)
+      </button>
+    </section>
+
+    <section class="group">
+      <h2>X (Twitter) &amp; Instagram Guardados</h2>
+      <button id="start">▶️ Iniciar / reanudar captura auto-scroll</button>
+      <button id="stop">⏸️ Pausar y guardar checkpoint</button>
+      <button id="sync">🔄 Sincronizar captura con Atlas (localhost:3000)</button>
+      <button id="download">💾 Descargar JSON capturado</button>
+      <button id="reset">🗑️ Nueva captura (borra checkpoint)</button>
+    </section>
+
+    <pre id="status" aria-live="polite">Abrí GitHub, YouTube, WhatsApp Web, X o Instagram.</pre>
+    <p class="hint">
+      Sincroniza automáticamente con Atlas en localhost:3000 (o 3070).
+    </p>
+    <script src="popup.js"></script>
+  </body>
+</html>

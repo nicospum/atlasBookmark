@@ -14,7 +14,8 @@ import {
   deleteProjectBlueprint,
   expandShortenedUrlsBatch,
   huntMissingGitHubReposBatch,
-  importRepositoryListWithDeduplication
+  importRepositoryListWithDeduplication,
+  insertBookmarksBatch
 } from '@/lib/bookmarks-repository'
 import {
   parseGitHubUrl,
@@ -27,6 +28,15 @@ import {
   evaluateAndClassifyRepository,
   extractRepositoriesFromAnyListOrPage
 } from '@/lib/github-gallery'
+import {
+  hydrateSingleRepoWithoutApiQuota,
+  hydrateReposBatchGraphQLOrHtml
+} from '@/lib/github-batch-hydrator'
+import {
+  buildCloudSyncBundle,
+  pushSyncBundleToGitHubGist,
+  pullSyncBundleFromGitHubGist
+} from '@/lib/cloud-sync'
 import type { AiProviderId, GalleryRepository, ProjectBlueprint, ResourceType } from '@/lib/types'
 
 function enrichReposWithAgentEvaluation(repos: GalleryRepository[]): GalleryRepository[] {
@@ -144,7 +154,7 @@ export async function POST(request: Request) {
       })
     }
 
-    if (action === 'refresh-repo') {
+    if (action === 'refresh-repo' || action === 'hydrate-batch-fast') {
       const repoNames: string[] = Array.isArray(body?.repos)
         ? body.repos
         : body?.fullName
@@ -158,42 +168,78 @@ export async function POST(request: Request) {
         )
       }
 
-      const refreshed: GalleryRepository[] = []
-      const errors: Array<{ repo: string; error: string }> = []
-
-      for (const nameStr of repoNames.slice(0, 15)) {
+      const targetRepos: GalleryRepository[] = []
+      for (const nameStr of repoNames.slice(0, 30)) {
         const parsed = parseGitHubUrl(nameStr)
         if (!parsed) continue
-        try {
-          const existing = getGalleryRepositoryByFullName(`${parsed.owner}/${parsed.repo}`)
-          const live = await fetchGitHubRepositoryData(parsed.owner, parsed.repo, token)
-          const aiExpl = await explainRepoWithAiServer(live, provider)
-
-          const merged: GalleryRepository = {
-            ...live,
-            explanation: aiExpl.shortExplanationEs,
-            shortExplanationEs: aiExpl.shortExplanationEs,
-            longExplanationEs: aiExpl.longExplanationEs,
+        const fullKey = `${parsed.owner}/${parsed.repo}`
+        const existing = getGalleryRepositoryByFullName(fullKey)
+        if (existing) {
+          targetRepos.push(existing)
+        } else {
+          targetRepos.push({
+            id: Date.now() + Math.floor(Math.random() * 10000),
+            owner: parsed.owner,
+            name: parsed.repo,
+            fullName: fullKey,
+            description: 'Sin descripción provista.',
+            url: `https://github.com/${fullKey}`,
+            stars: 0,
+            forks: 0,
+            openIssues: 0,
+            topics: [],
+            languages: [],
+            primaryLanguage: null,
+            license: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            pushedAt: new Date().toISOString(),
+            homepage: null,
+            avatarUrl: `https://github.com/${parsed.owner}.png?size=200`,
+            readme: '',
+            latestRelease: null,
+            imageUrl: `https://opengraph.githubassets.com/1/${parsed.owner}/${parsed.repo}`,
+            imageSource: 'opengraph',
+            explanation: '',
+            shortExplanationEs: '',
+            longExplanationEs: '',
             explanationGeneratedAt: new Date().toISOString(),
-            resourceType:
-              existing?.resourceType && existing.resourceType !== 'Otro / pendiente de clasificar'
-                ? existing.resourceType
-                : aiExpl.resourceType || live.resourceType,
-            linkedBookmarkIds: existing?.linkedBookmarkIds || [],
-            notes: existing?.notes || ''
-          }
-
-          const saved = saveGalleryRepoWithBookmark(merged, { createBookmarkIfUnlinked: false })
-          refreshed.push(saved)
-        } catch (err: any) {
-          errors.push({ repo: nameStr, error: err.message || 'Error al enriquecer desde GitHub API' })
+            addedAt: new Date().toISOString()
+          })
         }
+      }
+
+      const { hydrated, refreshedCount, errors } = await hydrateReposBatchGraphQLOrHtml(targetRepos, {
+        token,
+        concurrency: 5
+      })
+
+      const refreshed: GalleryRepository[] = []
+      for (const h of hydrated) {
+        let finalRepo = h
+        if (provider && provider !== 'deterministic' && hydrated.length <= 4) {
+          try {
+            const aiExpl = await explainRepoWithAiServer(h, provider)
+            finalRepo = {
+              ...h,
+              explanation: aiExpl.shortExplanationEs,
+              shortExplanationEs: aiExpl.shortExplanationEs,
+              longExplanationEs: aiExpl.longExplanationEs,
+              resourceType:
+                h.resourceType && h.resourceType !== 'Otro / pendiente de clasificar'
+                  ? h.resourceType
+                  : aiExpl.resourceType || h.resourceType
+            }
+          } catch {}
+        }
+        const saved = saveGalleryRepoWithBookmark(finalRepo, { createBookmarkIfUnlinked: false })
+        refreshed.push(saved)
       }
 
       return NextResponse.json({
         success: true,
-        refreshedCount: refreshed.length,
-        repositories: refreshed,
+        refreshedCount: refreshed.length || refreshedCount,
+        repositories: enrichReposWithAgentEvaluation(refreshed),
         errors
       })
     }
@@ -479,6 +525,69 @@ export async function POST(request: Request) {
         markdown,
         blueprint
       })
+    }
+
+    if (action === 'cloud-sync-gist') {
+      const mode = String(body?.mode || 'push')
+      const gistId = body?.gistId ? String(body.gistId).trim() : undefined
+
+      if (mode === 'push') {
+        if (!token) {
+          return jsonWithCors(
+            {
+              success: false,
+              error: 'Para subir tu respaldo a GitHub Gist necesitás configurar un GitHub Personal Access Token con permiso "gist".'
+            },
+            { status: 400 }
+          )
+        }
+        const bundle = buildCloudSyncBundle({
+          bookmarks: getAllBookmarks(),
+          repositories: getAllGalleryRepositories(),
+          blueprints: getAllProjectBlueprints()
+        })
+        const pushed = await pushSyncBundleToGitHubGist({
+          token,
+          gistId,
+          bundle
+        })
+        return jsonWithCors({
+          success: true,
+          mode: 'push',
+          gistId: pushed.gistId,
+          gistUrl: pushed.gistUrl,
+          updatedAt: pushed.updatedAt,
+          counts: bundle.counts
+        })
+      }
+
+      if (mode === 'pull') {
+        if (!gistId) {
+          return jsonWithCors(
+            { success: false, error: 'Ingresá el ID o URL del GitHub Gist para restaurar tu catálogo.' },
+            { status: 400 }
+          )
+        }
+        const pulled = await pullSyncBundleFromGitHubGist({ token, gistId })
+        if (Array.isArray(pulled.bookmarks) && pulled.bookmarks.length > 0) {
+          insertBookmarksBatch(pulled.bookmarks)
+        }
+        for (const repo of pulled.repositories || []) {
+          saveGalleryRepoWithBookmark(repo, { createBookmarkIfUnlinked: false })
+        }
+        for (const bp of pulled.blueprints || []) {
+          if (bp?.name) upsertProjectBlueprint(bp)
+        }
+        const repositories = enrichReposWithAgentEvaluation(getAllGalleryRepositories())
+        return jsonWithCors({
+          success: true,
+          mode: 'pull',
+          exportedAt: pulled.exportedAt,
+          counts: pulled.counts,
+          repositories,
+          blueprints: getAllProjectBlueprints()
+        })
+      }
     }
 
     return jsonWithCors({ success: false, error: `Acción no soportada: ${action}` }, { status: 400 })

@@ -8,10 +8,16 @@ import {
   compareRepositoriesServer
 } from '@/lib/github-gallery'
 import {
+  getAllBookmarks,
   getAllGalleryRepositories,
   getGalleryRepositoryByFullName,
-  upsertGalleryRepository
+  upsertGalleryRepository,
+  upsertProjectBlueprint
 } from '@/lib/bookmarks-repository'
+import {
+  recommendStackForProjectIdea,
+  buildReleaseAndTrendingRadar
+} from '@/lib/stack-recommender'
 import type { AiProviderId, GalleryRepository } from '@/lib/types'
 
 export async function GET() {
@@ -135,6 +141,45 @@ export async function POST(request: Request) {
       return NextResponse.json({
         success: true,
         comparison
+      })
+    }
+
+    if (action === 'recommend-stack') {
+      const idea = String(body?.idea || '').trim()
+      if (!idea) {
+        return NextResponse.json(
+          { success: false, error: 'Describí tu idea de proyecto para recomendar un stack.' },
+          { status: 400 }
+        )
+      }
+      const repos = getAllGalleryRepositories()
+      const bookmarks = getAllBookmarks()
+      const recommendation = recommendStackForProjectIdea({
+        idea,
+        repos,
+        bookmarks,
+        maxRepos: typeof body?.maxRepos === 'number' ? body.maxRepos : 6,
+        provider
+      })
+
+      if (body?.autoSaveBlueprint === true && recommendation.generatedBlueprint) {
+        const savedBp = upsertProjectBlueprint(recommendation.generatedBlueprint)
+        recommendation.generatedBlueprint = savedBp
+      }
+
+      return NextResponse.json({
+        success: true,
+        recommendation
+      })
+    }
+
+    if (action === 'release-radar') {
+      const repos = getAllGalleryRepositories()
+      const bookmarks = getAllBookmarks()
+      const radarItems = buildReleaseAndTrendingRadar(repos, bookmarks)
+      return NextResponse.json({
+        success: true,
+        radarItems
       })
     }
 
