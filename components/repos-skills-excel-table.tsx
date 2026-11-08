@@ -22,7 +22,10 @@ import {
   X,
   ThumbsUp,
   AlertTriangle,
-  ThumbsDown
+  ThumbsDown,
+  Compass,
+  FolderArchive,
+  RotateCcw
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,15 +37,21 @@ import {
   extractAllSkillsFromRepositories
 } from '@/lib/repo-skills-extractor'
 import { generateRepositoriesExcelFile } from '@/lib/excel-export'
+import {
+  evaluateBookmarkScopeAndOffTopic,
+  skillBuildFallbackReferenceLink
+} from '@/lib/web-navigator-agent'
+import { classifyGitHubUrl } from '@/lib/resource-investigator'
 
 interface ReposSkillsExcelTableProps {
   bookmarks?: BookmarkItem[]
   initialRepos?: GalleryRepository[]
   initialSkills?: ExtractedRepoSkill[]
   onSelectRepoDetail?: (fullName: string) => void
+  onRefreshBookmarks?: () => Promise<void>
   title?: string
   subtitle?: string
-  defaultSheet?: 'repos' | 'skills'
+  defaultSheet?: 'repos' | 'skills' | 'links' | 'separated'
 }
 
 export function ReposSkillsExcelTable({
@@ -50,14 +59,18 @@ export function ReposSkillsExcelTable({
   initialRepos,
   initialSkills,
   onSelectRepoDetail,
-  title = 'Planilla Maestra Interactiva (Tipo Excel — 2 Pestañas)',
-  subtitle = 'Consultá, filtrá y editá comentarios de todos tus Repositorios y de los Skills individuales que hay adentro de cada uno sin necesidad de exportar.',
+  onRefreshBookmarks,
+  title = 'Planilla Maestra Interactiva (Tipo Excel — Repositorios, Skills, Navegador de Links y Archivos Separados)',
+  subtitle = 'Consultá tus Repositorios (Pestaña 1), los Skills dentro de cada repo (Pestaña 2), los Links de Referencia / Búsqueda Asistida para posts sin link directo (Pestaña 3) y los Archivos Separados de otros temas no técnicos (Pestaña 4).',
   defaultSheet = 'repos'
 }: ReposSkillsExcelTableProps) {
-  const [activeSheet, setActiveSheet] = useState<'repos' | 'skills'>(defaultSheet)
+  const [activeSheet, setActiveSheet] = useState<'repos' | 'skills' | 'links' | 'separated'>(defaultSheet)
   const [repos, setRepos] = useState<GalleryRepository[]>(initialRepos || [])
   const [skills, setSkills] = useState<ExtractedRepoSkill[]>(initialSkills || [])
+  const [localBookmarks, setLocalBookmarks] = useState<BookmarkItem[]>(bookmarks)
   const [isLoading, setIsLoading] = useState(!initialRepos || initialRepos.length === 0)
+  const [isAgentRunning, setIsAgentRunning] = useState(false)
+  const [agentStatusMsg, setAgentStatusMsg] = useState('')
 
   // Shared & Tab-specific filters
   const [searchQuery, setSearchQuery] = useState('')
@@ -97,6 +110,10 @@ export function ReposSkillsExcelTable({
     } finally {
       setIsLoading(false)
     }
+  }, [bookmarks])
+
+  useEffect(() => {
+    setLocalBookmarks(bookmarks)
   }, [bookmarks])
 
   useEffect(() => {
@@ -250,7 +267,104 @@ export function ReposSkillsExcelTable({
       })
   }, [skills, searchQuery, areaFilter, skillKindFilter, repoFilterForSkills, onlySubSkills, recFilter, sortBy])
 
-  const activeTotalCount = activeSheet === 'repos' ? filteredRepos.length : filteredSkills.length
+  // Pestaña 3: Links Intermedios & Navegador IA ("El Link de ese Link" para posts técnicos sin GitHub directo)
+  const referenceLinkBookmarks = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    return localBookmarks
+      .filter(bm => {
+        if (bm.platform === 'github') return false
+        const hasGh =
+          (bm.resources || []).some(r => r.kind === 'github_repo') ||
+          (bm.outgoingLinks || []).some(u => classifyGitHubUrl(u)?.kind === 'github_repo')
+        if (hasGh) return false
+
+        const isExplicitlySeparated =
+          bm.resourceType === 'Archivo separado / Otro tema (No técnico)' ||
+          (bm.topics || []).includes('Archivos Separados / Otros Temas')
+        if (isExplicitlySeparated) return false
+
+        const scope = evaluateBookmarkScopeAndOffTopic({
+          caption: bm.caption,
+          title: bm.title,
+          authorName: bm.authorName,
+          authorHandle: bm.authorHandle,
+          platform: bm.platform,
+          outgoingLinks: bm.outgoingLinks,
+          mediaType: bm.mediaType,
+          mediaUrls: bm.mediaUrls,
+          topics: bm.topics
+        })
+        if (scope.isOffTopic) return false
+
+        if (!q) return true
+        const hay = `${bm.title || ''} ${bm.caption || ''} ${bm.authorHandle || ''} ${bm.authorName || ''} ${(bm.outgoingLinks || []).join(' ')}`.toLowerCase()
+        return hay.includes(q)
+      })
+      .map(bm => {
+        const fallback = skillBuildFallbackReferenceLink({
+          sourceUrl: bm.sourceUrl,
+          platform: bm.platform,
+          authorHandle: bm.authorHandle,
+          authorName: bm.authorName,
+          title: bm.title,
+          caption: bm.caption,
+          expandedUrls: bm.outgoingLinks || [],
+          candidateQueries: []
+        })
+        return { bm, fallback }
+      })
+  }, [localBookmarks, searchQuery])
+
+  // Pestaña 4: Archivos Separados (Fotos personales, ocio, deportes, juegos casuales y otros temas fuera del radar técnico)
+  const separatedOffTopicBookmarks = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    return localBookmarks
+      .filter(bm => {
+        if (bm.platform === 'github') return false
+        const isExplicitlySeparated =
+          bm.resourceType === 'Archivo separado / Otro tema (No técnico)' ||
+          (bm.topics || []).includes('Archivos Separados / Otros Temas')
+        const scope = evaluateBookmarkScopeAndOffTopic({
+          caption: bm.caption,
+          title: bm.title,
+          authorName: bm.authorName,
+          authorHandle: bm.authorHandle,
+          platform: bm.platform,
+          outgoingLinks: bm.outgoingLinks,
+          mediaType: bm.mediaType,
+          mediaUrls: bm.mediaUrls,
+          topics: bm.topics
+        })
+        if (!isExplicitlySeparated && !scope.isOffTopic) return false
+        if (!q) return true
+        const hay = `${bm.title || ''} ${bm.caption || ''} ${bm.authorHandle || ''} ${scope.categoryLabel} ${scope.reasonEs}`.toLowerCase()
+        return hay.includes(q)
+      })
+      .map(bm => {
+        const scope = evaluateBookmarkScopeAndOffTopic({
+          caption: bm.caption,
+          title: bm.title,
+          authorName: bm.authorName,
+          authorHandle: bm.authorHandle,
+          platform: bm.platform,
+          outgoingLinks: bm.outgoingLinks,
+          mediaType: bm.mediaType,
+          mediaUrls: bm.mediaUrls,
+          topics: bm.topics
+        })
+        return { bm, scope }
+      })
+  }, [localBookmarks, searchQuery])
+
+  const activeTotalCount =
+    activeSheet === 'repos'
+      ? filteredRepos.length
+      : activeSheet === 'skills'
+      ? filteredSkills.length
+      : activeSheet === 'links'
+      ? referenceLinkBookmarks.length
+      : separatedOffTopicBookmarks.length
+
   const totalPages = pageSize === 0 ? 1 : Math.max(1, Math.ceil(activeTotalCount / pageSize))
   const visibleRepos = useMemo(() => {
     if (pageSize === 0) return filteredRepos
@@ -263,6 +377,93 @@ export function ReposSkillsExcelTable({
     const start = (currentPage - 1) * pageSize
     return filteredSkills.slice(start, start + pageSize)
   }, [filteredSkills, currentPage, pageSize])
+
+  const visibleRefLinks = useMemo(() => {
+    if (pageSize === 0) return referenceLinkBookmarks
+    const start = (currentPage - 1) * pageSize
+    return referenceLinkBookmarks.slice(start, start + pageSize)
+  }, [referenceLinkBookmarks, currentPage, pageSize])
+
+  const visibleSeparated = useMemo(() => {
+    if (pageSize === 0) return separatedOffTopicBookmarks
+    const start = (currentPage - 1) * pageSize
+    return separatedOffTopicBookmarks.slice(start, start + pageSize)
+  }, [separatedOffTopicBookmarks, currentPage, pageSize])
+
+  const handleRunWebNavigatorAgent = async (bookmarkIds?: string[]) => {
+    setIsAgentRunning(true)
+    setAgentStatusMsg(
+      bookmarkIds && bookmarkIds.length === 1
+        ? 'Navegando hilo, comentarios y web con el Agente IA...'
+        : 'Ejecutando Agente Navegador IA en hilos, comentarios y páginas intermedias...'
+    )
+    try {
+      const res = await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'hunt-missing-repos',
+          limit: bookmarkIds ? bookmarkIds.length : 45,
+          bookmarkIds
+        })
+      })
+      const data = await res.json().catch(() => null)
+      if (res.ok && data?.success) {
+        setAgentStatusMsg(
+          `✅ Agente Navegador completado: ${data.discoveredReposCount || 0} repositorios ocultos descubiertos (${data.newGalleryReposCount || 0} nuevos en Galería) y links de referencia actualizados.`
+        )
+        await fetchReposAndSkills()
+        await onRefreshBookmarks?.()
+      } else {
+        setAgentStatusMsg(data?.error || 'No se pudo completar la navegación.')
+      }
+    } catch {
+      setAgentStatusMsg('Error de red al ejecutar el Agente Navegador.')
+    } finally {
+      setIsAgentRunning(false)
+    }
+  }
+
+  const handleToggleOffTopicSeparation = async (bm: BookmarkItem, moveToSeparated: boolean) => {
+    setSavingId(bm.id)
+    const nextResourceType = moveToSeparated
+      ? ('Archivo separado / Otro tema (No técnico)' as const)
+      : ('Aplicación o herramienta' as const)
+    const nextTopics = moveToSeparated
+      ? Array.from(new Set(['Archivos Separados / Otros Temas', ...(bm.topics || []).filter(t => t !== 'Sin clasificar')]))
+      : (bm.topics || []).filter(t => t !== 'Archivos Separados / Otros Temas')
+
+    setLocalBookmarks(prev =>
+      prev.map(item =>
+        item.id === bm.id
+          ? {
+              ...item,
+              resourceType: nextResourceType,
+              topics: nextTopics.length > 0 ? nextTopics : ['IA']
+            }
+          : item
+      )
+    )
+
+    try {
+      await fetch(`/api/bookmarks/${encodeURIComponent(bm.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          resourceType: nextResourceType,
+          topics: nextTopics.length > 0 ? nextTopics : ['IA'],
+          evaluation: moveToSeparated
+            ? 'Marcado como Archivo Separado (Fuera del radar técnico) para mantener limpia la biblioteca.'
+            : 'Restaurado al Radar Técnico de IA, programación y herramientas.'
+        })
+      })
+      await onRefreshBookmarks?.()
+    } catch (err) {
+      console.error('Error cambiando clasificación de archivo separado:', err)
+    } finally {
+      setSavingId(null)
+    }
+  }
 
   const handleSaveSkillNote = async (
     skillId: string,
@@ -377,6 +578,17 @@ export function ReposSkillsExcelTable({
             <Button
               size="sm"
               variant="outline"
+              onClick={() => handleRunWebNavigatorAgent()}
+              disabled={isAgentRunning || isLoading}
+              className="border-amber-500/40 bg-amber-500/10 text-xs text-amber-200 hover:bg-amber-500/20"
+              title="Ejecuta el Agente Navegador IA: lee hilos/comentarios, navega páginas intermedias, busca en GitHub/Web y separa archivos no técnicos"
+            >
+              <Compass className={`mr-1.5 size-3.5 ${isAgentRunning ? 'animate-spin' : ''}`} />
+              {isAgentRunning ? 'Navegando hilos y web...' : '🕵️ Agente Navegador IA (Hilos y Comentarios)'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
               onClick={fetchReposAndSkills}
               disabled={isLoading}
               className="border-border bg-[#12141d] text-xs"
@@ -389,7 +601,7 @@ export function ReposSkillsExcelTable({
               onClick={() =>
                 generateRepositoriesExcelFile(
                   repos,
-                  bookmarks,
+                  localBookmarks,
                   `atlas-repositorios-y-skills-${new Date().toISOString().slice(0, 10)}.xlsx`,
                   skills
                 )
@@ -402,13 +614,29 @@ export function ReposSkillsExcelTable({
           </div>
         </div>
 
+        {agentStatusMsg && (
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-950/30 px-3.5 py-2 text-xs text-amber-200">
+            <div className="flex items-center gap-2">
+              <Sparkles className="size-3.5 text-amber-400 shrink-0" />
+              <span>{agentStatusMsg}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAgentStatusMsg('')}
+              className="text-amber-300 hover:text-white"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
+
         {/* EXCEL SHEET TABS (TOP) */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-          <div className="inline-flex rounded-lg border border-[#2e3247] bg-[#0f1118] p-1">
+          <div className="flex flex-wrap items-center gap-1 rounded-lg border border-[#2e3247] bg-[#0f1118] p-1">
             <button
               type="button"
               onClick={() => setActiveSheet('repos')}
-              className={`flex items-center gap-2 rounded-md px-4 py-2 text-xs font-semibold transition-all ${
+              className={`flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-all ${
                 activeSheet === 'repos'
                   ? 'bg-[#7c6cf0] text-white shadow-sm'
                   : 'text-muted-foreground hover:bg-[#1a1d29] hover:text-foreground'
@@ -430,14 +658,14 @@ export function ReposSkillsExcelTable({
             <button
               type="button"
               onClick={() => setActiveSheet('skills')}
-              className={`flex items-center gap-2 rounded-md px-4 py-2 text-xs font-semibold transition-all ${
+              className={`flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-all ${
                 activeSheet === 'skills'
                   ? 'bg-emerald-600 text-white shadow-sm'
                   : 'text-muted-foreground hover:bg-[#1a1d29] hover:text-foreground'
               }`}
             >
               <Puzzle className="size-4" />
-              <span>Pestaña 2: Skills dentro de los Repositorios</span>
+              <span>Pestaña 2: Skills en Repos</span>
               <span
                 className={`rounded-full px-2 py-0.5 text-[10px] ${
                   activeSheet === 'skills'
@@ -446,6 +674,52 @@ export function ReposSkillsExcelTable({
                 }`}
               >
                 {filteredSkills.length} / {skills.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSheet('links')}
+              className={`flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-all ${
+                activeSheet === 'links'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-muted-foreground hover:bg-[#1a1d29] hover:text-foreground'
+              }`}
+              title="Publicaciones técnicas donde el link no apunta directo a GitHub (está en comentarios o es un link intermedio). Incluye 'el link de ese link' y búsqueda asistida en 1 clic."
+            >
+              <Compass className="size-4" />
+              <span>Pestaña 3: Links Intermedios / En Comentarios</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] ${
+                  activeSheet === 'links'
+                    ? 'bg-black/25 text-white'
+                    : 'bg-[#1e2130] text-muted-foreground'
+                }`}
+              >
+                {referenceLinkBookmarks.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSheet('separated')}
+              className={`flex items-center gap-2 rounded-md px-3.5 py-2 text-xs font-semibold transition-all ${
+                activeSheet === 'separated'
+                  ? 'bg-rose-600 text-white shadow-sm'
+                  : 'text-muted-foreground hover:bg-[#1a1d29] hover:text-foreground'
+              }`}
+              title="Archivos separados automáticamente o manualmente porque son de otros temas no técnicos (fotos personales, deportes, comida, juegos casuales, etc.)."
+            >
+              <FolderArchive className="size-4" />
+              <span>Pestaña 4: Archivos Separados (Otros Temas)</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] ${
+                  activeSheet === 'separated'
+                    ? 'bg-black/25 text-white'
+                    : 'bg-[#1e2130] text-muted-foreground'
+                }`}
+              >
+                {separatedOffTopicBookmarks.length}
               </span>
             </button>
           </div>
@@ -856,7 +1130,7 @@ export function ReposSkillsExcelTable({
               )}
             </tbody>
           </table>
-        ) : (
+        ) : activeSheet === 'skills' ? (
           /* ================= PESTAÑA 2: SKILLS DENTRO DE LOS REPOSITORIOS ================= */
           <table className="w-full border-collapse text-left text-xs">
             <thead className="sticky top-0 z-10 bg-[#142420] text-[11px] font-semibold uppercase tracking-wider text-emerald-200 shadow-sm">
@@ -1133,13 +1407,247 @@ export function ReposSkillsExcelTable({
               )}
             </tbody>
           </table>
+        ) : activeSheet === 'links' ? (
+          /* ================= PESTAÑA 3: LINKS INTERMEDIOS / EN COMENTARIOS ("EL LINK DE ESE LINK") ================= */
+          <table className="w-full border-collapse text-left text-xs">
+            <thead className="sticky top-0 z-10 bg-[#261e12] text-[11px] font-semibold uppercase tracking-wider text-amber-200 shadow-sm">
+              <tr className="border-b border-amber-500/30">
+                <th className="border-r border-[#33291a] px-3 py-2.5 text-center w-10">#</th>
+                <th className="border-r border-[#33291a] px-3 py-2.5 min-w-[230px]">Publicación / Herramienta mencionada</th>
+                <th className="border-r border-[#33291a] px-3 py-2.5 min-w-[280px]">Qué dice el post / Para qué sirve</th>
+                <th className="border-r border-[#33291a] px-3 py-2.5 min-w-[250px]">
+                  El Link de ese Link (Enlace Intermedio o Hilo)
+                </th>
+                <th className="border-r border-[#33291a] px-3 py-2.5 min-w-[250px]">
+                  Búsqueda Asistida en 1 Clic (GitHub / Web)
+                </th>
+                <th className="border-r border-[#33291a] px-3 py-2.5 min-w-[220px]">Diagnóstico del Agente</th>
+                <th className="px-3 py-2.5 min-w-[190px]">Acciones (Navegar / Separar)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1e2130]">
+              {visibleRefLinks.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-xs text-muted-foreground">
+                    No hay publicaciones técnicas pendientes sin repositorio directo para este filtro.
+                  </td>
+                </tr>
+              ) : (
+                visibleRefLinks.map(({ bm, fallback }, idx) => {
+                  const rowNum = (currentPage - 1) * (pageSize || referenceLinkBookmarks.length) + idx + 1
+                  return (
+                    <tr
+                      key={bm.id}
+                      className="group transition-colors hover:bg-[#221c14] odd:bg-[#0f1119] even:bg-[#121520]"
+                    >
+                      <td className="border-r border-[#1e2130] px-2.5 py-3 text-center font-mono text-[11px] text-muted-foreground">
+                        {rowNum}
+                      </td>
+
+                      {/* Publicación / Autor */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="font-semibold text-amber-200">{bm.title || bm.id}</div>
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <span className="font-mono text-[#bfb8ff]">
+                            {bm.authorHandle || bm.authorName}
+                          </span>
+                          <span>·</span>
+                          <span className="uppercase">{bm.platform}</span>
+                          {bm.resourceType && (
+                            <Badge variant="outline" className="border-amber-500/30 text-[10px] text-amber-300">
+                              {bm.resourceType}
+                            </Badge>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Qué dice el post */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-[#e2e4f0]">
+                        <p className="line-clamp-3">{bm.purpose || bm.caption}</p>
+                      </td>
+
+                      {/* El Link de ese Link */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1.5">
+                          <a
+                            href={fallback.primaryUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/25 w-fit"
+                          >
+                            <ExternalLink className="size-3.5 shrink-0" />
+                            <span>{fallback.primaryLabel}</span>
+                          </a>
+                          <span className="font-mono text-[10px] text-muted-foreground break-all">
+                            {fallback.primaryUrl}
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* Búsqueda Asistida en 1 Clic */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <a
+                              href={fallback.githubSearchUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 rounded border border-[#7c6cf0]/50 bg-[#7c6cf0]/15 px-2 py-1 text-[11px] font-medium text-[#bfb8ff] hover:bg-[#7c6cf0]/25"
+                              title="Buscar el repositorio directamente en GitHub"
+                            >
+                              <Search className="size-3" />
+                              <span>Buscar en GitHub</span>
+                            </a>
+                            <a
+                              href={fallback.webSearchUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 rounded border border-sky-500/40 bg-sky-500/15 px-2 py-1 text-[11px] font-medium text-sky-300 hover:bg-sky-500/25"
+                              title="Buscar site:github.com en Google con las palabras clave extraídas"
+                            >
+                              <ExternalLink className="size-3" />
+                              <span>Buscar en Google</span>
+                            </a>
+                          </div>
+                          <span className="text-[10px] text-muted-foreground">
+                            Query sugerida: <code className="text-amber-300">{fallback.extractedQuery}</code>
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* Diagnóstico */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top text-[11px] text-muted-foreground leading-relaxed">
+                        {fallback.reasonEs}
+                      </td>
+
+                      {/* Acciones */}
+                      <td className="px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1.5">
+                          <Button
+                            size="xs"
+                            variant="outline"
+                            disabled={isAgentRunning}
+                            onClick={() => handleRunWebNavigatorAgent([bm.id])}
+                            className="border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-200 hover:bg-amber-500/20 justify-start"
+                          >
+                            <Compass className="mr-1.5 size-3" />
+                            Navegar con Agente IA
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            disabled={savingId === bm.id}
+                            onClick={() => handleToggleOffTopicSeparation(bm, true)}
+                            className="text-[11px] text-rose-300 hover:bg-rose-500/15 hover:text-rose-200 justify-start"
+                            title="Si este archivo no tiene que ver con los temas que trabajamos acá, movelo a Archivos Separados (Pestaña 4)"
+                          >
+                            <FolderArchive className="mr-1.5 size-3" />
+                            Separar (Es de otro tema)
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        ) : (
+          /* ================= PESTAÑA 4: ARCHIVOS SEPARADOS (FOTOS PERSONALES Y OTROS TEMAS NO TÉCNICOS) ================= */
+          <table className="w-full border-collapse text-left text-xs">
+            <thead className="sticky top-0 z-10 bg-[#28151d] text-[11px] font-semibold uppercase tracking-wider text-rose-200 shadow-sm">
+              <tr className="border-b border-rose-500/30">
+                <th className="border-r border-[#381d28] px-3 py-2.5 text-center w-10">#</th>
+                <th className="border-r border-[#381d28] px-3 py-2.5 min-w-[220px]">Archivo / Publicación Separada</th>
+                <th className="border-r border-[#381d28] px-3 py-2.5 min-w-[200px]">Categoría de Otro Tema</th>
+                <th className="border-r border-[#381d28] px-3 py-2.5 min-w-[280px]">Por qué se separó del Radar Técnico</th>
+                <th className="border-r border-[#381d28] px-3 py-2.5 min-w-[260px]">Contenido / Multimedia</th>
+                <th className="border-r border-[#381d28] px-3 py-2.5 min-w-[180px]">Enlace al Archivo</th>
+                <th className="px-3 py-2.5 min-w-[180px]">Acción</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1e2130]">
+              {visibleSeparated.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-xs text-muted-foreground">
+                    No hay archivos separados en este momento. Cuando entren fotos personales, deportes, juegos casuales o temas ajenos al trabajo técnico, aparecerán aquí automáticamente.
+                  </td>
+                </tr>
+              ) : (
+                visibleSeparated.map(({ bm, scope }, idx) => {
+                  const rowNum = (currentPage - 1) * (pageSize || separatedOffTopicBookmarks.length) + idx + 1
+                  const primaryLink = (bm.outgoingLinks && bm.outgoingLinks[0]) || bm.sourceUrl
+                  return (
+                    <tr
+                      key={bm.id}
+                      className="group transition-colors hover:bg-[#24141b] odd:bg-[#0f1119] even:bg-[#121520]"
+                    >
+                      <td className="border-r border-[#1e2130] px-2.5 py-3 text-center font-mono text-[11px] text-muted-foreground">
+                        {rowNum}
+                      </td>
+
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="font-semibold text-rose-200">{bm.title || bm.id}</div>
+                        <div className="mt-1 text-[11px] text-muted-foreground">
+                          {bm.authorHandle || bm.authorName} · {bm.platform.toUpperCase()}
+                        </div>
+                      </td>
+
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <Badge className="border border-rose-500/40 bg-rose-500/15 text-[11px] text-rose-200">
+                          {scope.categoryLabel}
+                        </Badge>
+                      </td>
+
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-muted-foreground">
+                        {scope.reasonEs}
+                      </td>
+
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top text-[#e2e4f0]">
+                        <p className="line-clamp-2">{bm.caption || 'Archivo multimedia sin texto'}</p>
+                        {bm.mediaType !== 'none' && (
+                          <span className="mt-1 inline-block rounded bg-[#231820] px-1.5 py-0.5 text-[10px] text-rose-300">
+                            Multimedia: {bm.mediaType} ({bm.mediaUrls.length})
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <a
+                          href={primaryLink}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] text-rose-300 hover:underline break-all"
+                        >
+                          Abrir enlace <ExternalLink className="size-3 shrink-0" />
+                        </a>
+                      </td>
+
+                      <td className="px-3 py-3 align-top">
+                        <Button
+                          size="xs"
+                          variant="outline"
+                          disabled={savingId === bm.id}
+                          onClick={() => handleToggleOffTopicSeparation(bm, false)}
+                          className="border-border text-[11px] text-muted-foreground hover:text-foreground"
+                        >
+                          <RotateCcw className="mr-1.5 size-3" />
+                          Devolver al Radar Técnico
+                        </Button>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
         )}
       </div>
 
       {/* EXCEL BOTTOM BAR (SHEET TABS + PAGINATION LIKE MICROSOFT EXCEL) */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#252838] bg-[#141722] px-4 py-2.5 text-xs">
         {/* Bottom Sheet Tabs like Excel */}
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
             onClick={() => setActiveSheet('repos')}
@@ -1162,7 +1670,31 @@ export function ReposSkillsExcelTable({
             }`}
           >
             <Puzzle className="size-3.5" />
-            <span>Hoja 2: Skills dentro de los Repos ({filteredSkills.length})</span>
+            <span>Hoja 2: Skills en Repos ({filteredSkills.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSheet('links')}
+            className={`flex items-center gap-1.5 rounded-t-md border-t-2 px-3 py-1.5 text-xs font-medium transition-colors ${
+              activeSheet === 'links'
+                ? 'border-amber-500 bg-[#282015] text-amber-300'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Compass className="size-3.5" />
+            <span>Hoja 3: Links de Referencia / En Comentarios ({referenceLinkBookmarks.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSheet('separated')}
+            className={`flex items-center gap-1.5 rounded-t-md border-t-2 px-3 py-1.5 text-xs font-medium transition-colors ${
+              activeSheet === 'separated'
+                ? 'border-rose-500 bg-[#28161d] text-rose-300'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <FolderArchive className="size-3.5" />
+            <span>Hoja 4: Archivos Separados / Otros Temas ({separatedOffTopicBookmarks.length})</span>
           </button>
         </div>
 

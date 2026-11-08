@@ -67,6 +67,10 @@ export const GITHUB_RESERVED_NAMES = new Set([
   'discussions',
   'dashboard',
   'team',
+  'open-source',
+  'resources',
+  'partners',
+  'services',
   'apps',
   'account',
   'personal-access-tokens',
@@ -757,6 +761,119 @@ export async function fetchRepositoryReadme(
   return ''
 }
 
+async function fetchGitHubRepositoryViaPublicHtmlFallback(
+  owner: string,
+  repo: string
+): Promise<GalleryRepository> {
+  const pageUrl = `https://github.com/${owner}/${repo}`
+  const res = await fetch(pageUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      Accept: 'text/html,application/xhtml+xml'
+    },
+    signal: AbortSignal.timeout(10000)
+  })
+  if (res.status === 404) {
+    throw new Error(`No se encontró el repositorio "${owner}/${repo}" en GitHub o es privado.`)
+  }
+  if (!res.ok) {
+    throw new Error(`Error al consultar GitHub HTML (HTTP ${res.status}).`)
+  }
+  const html = await res.text()
+
+  const parseCount = (raw?: string): number => {
+    if (!raw) return 0
+    const cleaned = raw.trim().replace(/,/g, '')
+    if (/^\d+$/.test(cleaned)) return Number(cleaned)
+    const m = cleaned.match(/^([\d.]+)\s*([kKmM])$/)
+    if (m) {
+      const mult = m[2].toLowerCase() === 'm' ? 1_000_000 : 1_000
+      return Math.round( parseFloat(m[1]) * mult )
+    }
+    return 0
+  }
+
+  const starTitleMatch =
+    html.match(/id="repo-stars-counter-star"[^>]*title="([\d,]+)"/i) ||
+    html.match(/aria-label="([\d,]+)\s+users?\s+starred\s+this\s+repository"/i) ||
+    html.match(/id="repo-stars-counter-star"[^>]*>([^<]+)</i) ||
+    html.match(/>Star\s*<span[^>]*>(?:<span[^>]*>)?([\d.,]+\s*[kKmM]?)</i)
+  const stars = parseCount(starTitleMatch?.[1])
+
+  const forkTitleMatch =
+    html.match(/id="repo-network-counter"[^>]*title="([\d,]+)"/i) ||
+    html.match(/id="repo-network-counter"[^>]*>([^<]+)</i) ||
+    html.match(/>Fork\s*<span[^>]*>(?:<span[^>]*>)?([\d.,]+\s*[kKmM]?)</i)
+  const forks = parseCount(forkTitleMatch?.[1])
+
+  const ogDescMatch = html.match(/<meta\s+property="og:description"\s+content="([^"]+)"/i)
+  let description = ogDescMatch ? ogDescMatch[1].trim() : ''
+  description = description
+    .replace(new RegExp(`\\s*-\\s*${owner}/${repo}\\s*$`, 'i'), '')
+    .replace(new RegExp(`^Contribute to ${owner}/${repo} development by creating an account on GitHub\\.?$`, 'i'), '')
+    .trim()
+
+  const ogImageMatch = html.match(/<meta\s+property="og:image"\s+content="([^"]+)"/i)
+  const imageUrl = ogImageMatch?.[1] || `https://opengraph.githubassets.com/1/${owner}/${repo}`
+
+  const langMatches = Array.from(
+    html.matchAll(/itemprop="programmingLanguage"[^>]*>([^<]+)</gi)
+  ).map(m => m[1].trim())
+  const primaryLanguage = langMatches[0] || null
+
+  const topicMatches = Array.from(
+    html.matchAll(/href="\/topics\/([a-z0-9-]+)"/gi)
+  ).map(m => m[1].toLowerCase())
+  const topics = Array.from(new Set(topicMatches)).slice(0, 12)
+
+  let readmeText = ''
+  try {
+    const rawRes = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/HEAD/README.md`, {
+      signal: AbortSignal.timeout(7000)
+    })
+    if (rawRes.ok) {
+      readmeText = (await rawRes.text()).slice(0, 25000)
+    }
+  } catch {}
+
+  const fullName = `${owner}/${repo}`
+  const now = new Date().toISOString()
+  const partialRepo: GalleryRepository = {
+    id: numericIdFromFullName(fullName),
+    owner,
+    name: repo,
+    fullName,
+    url: `https://github.com/${fullName}`,
+    avatarUrl: `https://github.com/${owner}.png?size=128`,
+    description: description || 'Sin descripción proporcionada en GitHub.',
+    explanation: description || 'Sin descripción proporcionada en GitHub.',
+    imageUrl,
+    imageSource: imageUrl.includes('opengraph.githubassets.com') ? 'opengraph' : 'readme',
+    stars,
+    forks,
+    openIssues: 0,
+    primaryLanguage,
+    languages: primaryLanguage ? [{ name: primaryLanguage, percentage: 100, color: '#6366f1' }] : [],
+    topics,
+    license: null,
+    createdAt: now,
+    updatedAt: now,
+    pushedAt: now,
+    latestRelease: null,
+    addedAt: now,
+    homepage: null,
+    defaultBranch: 'main',
+    readme: readmeText
+  }
+
+  const synth = buildDeterministicSpanishExplanations(partialRepo)
+  partialRepo.shortExplanationEs = synth.shortExplanationEs
+  partialRepo.longExplanationEs = synth.longExplanationEs
+  partialRepo.explanation = synth.shortExplanationEs
+  partialRepo.resourceType = synth.resourceType
+  return partialRepo
+}
+
 export async function fetchGitHubRepositoryData(
   owner: string,
   repo: string,
@@ -772,9 +889,7 @@ export async function fetchGitHubRepositoryData(
 
   if (!repoRes.ok) {
     if (repoRes.status === 403 || repoRes.status === 429) {
-      throw new Error(
-        'Se alcanzó temporalmente el límite de consultas anónimas de GitHub (60/hora). Agregá un Personal Access Token opcional en Ajustes de Galería para ampliar a 5.000 consultas/hora.'
-      )
+      return await fetchGitHubRepositoryViaPublicHtmlFallback(owner, repo)
     }
     if (repoRes.status === 404) {
       throw new Error(`No se encontró el repositorio "${owner}/${repo}" en GitHub o es privado.`)

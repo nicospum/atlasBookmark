@@ -17,6 +17,7 @@ export const CANONICAL_RESOURCE_TYPES: ResourceType[] = [
   'Modelo o dataset',
   'Artículo, tutorial, investigación o material educativo',
   'Idea o proyecto',
+  'Archivo separado / Otro tema (No técnico)',
   'Otro / pendiente de clasificar'
 ]
 
@@ -43,7 +44,13 @@ const NON_REPO_GITHUB_SEGMENTS = new Set([
   'codespaces',
   'copilot',
   'security',
-  ' enterprise',
+  'enterprise',
+  'open-source',
+  'resources',
+  'solutions',
+  'team',
+  'partners',
+  'services',
   'readme',
   'customer-stories'
 ])
@@ -245,6 +252,19 @@ export function inferResourceType(
       return 'Aplicación o herramienta'
     }
     return 'Librería, framework o SDK'
+  }
+
+  // 6.5. Off-topic / Personal / Casual Games / Non-technical separation check
+  const isCasualGameOrOffTopicDomain = urls.some(u =>
+    /canyonoverdrive\.ai-created\.com|sortie\.ashutoshai\.com|mercadolibre\.com/i.test(u)
+  )
+  const isPersonalMediaOrOffTopicText =
+    /(?:^|\b)(?:img[-_]\d{6,}|vid[-_]\d{6,}|ptt[-_]\d{6,}|aud[-_]\d{6,}|<multimedia omitido>|multimedia omitido|image omitted|video omitted|audio omitted|sticker omitted|foto familiar|fotos de las vacaciones|selfie|f[uú]tbol|messi|scaloni|boca juniors|river plate|champions league|receta de|ingredientes:|c[oó]mo cocinar|asado|vacaciones en|hotel en|vuelos baratos|alquiler de departamento|comprobante de pago|transferencia bancaria|turno m[eé]dico|you can play here|did you try mine yet|vibe-coded game i['’]ve played)(?:\b|$)/i.test(
+      combined
+    ) || topics.includes('Archivos Separados / Otros Temas')
+
+  if (isCasualGameOrOffTopicDomain || (isPersonalMediaOrOffTopicText && !hasGitHubRepo)) {
+    return 'Archivo separado / Otro tema (No técnico)'
   }
 
   // 7. Application or Tool
@@ -549,7 +569,9 @@ export function synthesizeBookmarkFields(input: {
   // 3. Build Brief Evaluation ("Evaluación breve": utilidad + limitación/evidencia)
   let evaluation = ''
   const confirmedRepos = githubRepos.filter(r => r.verificationStatus === 'confirmed')
-  if (confirmedRepos.length > 0) {
+  if (resourceType === 'Archivo separado / Otro tema (No técnico)') {
+    evaluation = `Archivo separado (Fuera del radar de IA/Programación): contenido personal, multimedia o recreativo apartado para no mezclar con tu catálogo de repositorios y herramientas.`
+  } else if (confirmedRepos.length > 0) {
     const repoInfo = confirmedRepos[0]
     const extraMeta = [
       repoInfo.stars !== undefined ? `★ ${repoInfo.stars}` : '',

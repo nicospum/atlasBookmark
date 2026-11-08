@@ -1116,12 +1116,13 @@ export function CaptureView({
         </Card>
       )}
 
-      {/* PLANILLA INTERACTIVA TIPO EXCEL DE 2 PESTAÑAS (REPOSITORIOS + SKILLS DENTRO DE LOS REPOSITORIOS) DEBAJO DE CAPTURA */}
+      {/* PLANILLA INTERACTIVA TIPO EXCEL DE 4 PESTAÑAS (REPOSITORIOS + SKILLS + LINKS EN COMENTARIOS + ARCHIVOS SEPARADOS) DEBAJO DE CAPTURA */}
       <ReposSkillsExcelTable
         bookmarks={bookmarks}
         onSelectRepoDetail={onOpenRepoDetail}
-        title="Tabla Interactiva de Repositorios y Skills (2 Pestañas tipo Excel)"
-        subtitle="Consultá acá mismo toda la información de tus Repositorios (Pestaña 1) y los Skills que hay adentro de cada uno (Pestaña 2: qué hace, link al repo, estrellas, comentarios, si se recomienda, empresa y para qué proyecto sirve) sin tener que exportarlos."
+        onRefreshBookmarks={onRefresh}
+        title="Tabla Interactiva Maestra (4 Pestañas tipo Excel: Repositorios, Skills, Links en Comentarios y Archivos Separados)"
+        subtitle="Consultá tus Repositorios (Pestaña 1), los Skills dentro de cada uno (Pestaña 2), los Links de Referencia / Búsqueda Asistida cuando el repo no está directo (Pestaña 3) y los Archivos Separados de otros temas no técnicos (Pestaña 4)."
       />
 
       {/* Historial real de importaciones (SQLite) */}

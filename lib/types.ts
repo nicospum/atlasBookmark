@@ -13,6 +13,7 @@ export type ResourceType =
   | 'Modelo o dataset'
   | 'Artículo, tutorial, investigación o material educativo'
   | 'Idea o proyecto'
+  | 'Archivo separado / Otro tema (No técnico)'
   | 'Otro / pendiente de clasificar'
 
 export type AnalysisState = 'pending' | 'partial' | 'completed' | 'error'
@@ -308,6 +309,21 @@ export interface RepoAgentEvaluation {
   sourcesSummary: string
 }
 
+export interface FallbackReferenceLink {
+  /** El enlace directo al post/hilo/comentario o al link intermedio expandido ("el link de ese link") */
+  primaryUrl: string
+  /** Etiqueta descriptiva del enlace primario (ej. "Abrir link intermedio (cleanapis.com)" o "Ver comentarios del hilo en X (@autor)") */
+  primaryLabel: string
+  /** URL de búsqueda inteligente en Google pre-armada para encontrar el repo en 1 clic */
+  webSearchUrl: string
+  /** URL de búsqueda directa en GitHub pre-armada */
+  githubSearchUrl: string
+  /** Términos clave extraídos por el agente para buscar */
+  extractedQuery: string
+  /** Explicación de por qué quedó como link de referencia */
+  reasonEs: string
+}
+
 export interface DeepHuntResultItem {
   bookmarkId: string
   bookmarkTitle: string
@@ -318,9 +334,22 @@ export interface DeepHuntResultItem {
     url: string
     description: string
     stars?: number
-    discoveryMethod: 'tweet_hydration' | 'reply_or_thread' | 'external_page_scrape' | 'github_search_inference' | 'shortlink_expansion'
+    discoveryMethod:
+      | 'tweet_hydration'
+      | 'reply_or_thread'
+      | 'external_page_scrape'
+      | 'github_search_inference'
+      | 'shortlink_expansion'
+      | 'ai_web_grounding'
+      | 'jina_reader_thread'
+      | 'author_bio_or_quote'
     confidence: 'confirmado' | 'probable'
   }>
+  /** Si no se halló repo directo en GitHub, se adjunta siempre "el link de ese link" + búsqueda asistida en 1 clic */
+  fallbackReference?: FallbackReferenceLink
+  /** Indica si el elemento fue apartado automáticamente por ser de otro tema no técnico (fotos personales, deportes, ocio, etc.) */
+  isOffTopicSeparated?: boolean
+  offTopicCategory?: string
 }
 
 export type ActivityFilterType =

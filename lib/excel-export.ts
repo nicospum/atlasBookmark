@@ -2,6 +2,8 @@ import * as XLSX from 'xlsx'
 import { BookmarkItem, GalleryRepository } from './types'
 import { evaluateAndClassifyRepository, extractInstallAndSetupSnippets } from './github-gallery'
 import { extractAllSkillsFromRepositories, ExtractedRepoSkill } from './repo-skills-extractor'
+import { evaluateBookmarkScopeAndOffTopic, skillBuildFallbackReferenceLink } from './web-navigator-agent'
+import { classifyGitHubUrl } from './resource-investigator'
 
 export interface ExportOptions {
   sheets: string[]
@@ -745,6 +747,122 @@ export function buildRepositoriesWorkbook(
   const wsSummary = XLSX.utils.json_to_sheet(summaryRows)
   wsSummary['!cols'] = [{ wch: 30 }, { wch: 50 }, { wch: 16 }]
   XLSX.utils.book_append_sheet(wb, wsSummary, 'Resumen Ejecutivo')
+
+  // 6. Sheet: Links de Referencia y Busqueda ("El Link de ese Link" para posts sin repo directo)
+  const nonGitHubTechBms = bookmarks.filter(bm => {
+    if (bm.platform === 'github') return false
+    const hasGh =
+      (bm.resources || []).some(r => r.kind === 'github_repo') ||
+      (bm.outgoingLinks || []).some(u => classifyGitHubUrl(u)?.kind === 'github_repo')
+    if (hasGh) return false
+    const scope = evaluateBookmarkScopeAndOffTopic({
+      caption: bm.caption,
+      title: bm.title,
+      authorName: bm.authorName,
+      authorHandle: bm.authorHandle,
+      platform: bm.platform,
+      outgoingLinks: bm.outgoingLinks,
+      mediaType: bm.mediaType,
+      mediaUrls: bm.mediaUrls,
+      topics: bm.topics
+    })
+    return !scope.isOffTopic && bm.resourceType !== 'Archivo separado / Otro tema (No técnico)'
+  })
+
+  const refRows = nonGitHubTechBms.map(bm => {
+    const fb = skillBuildFallbackReferenceLink({
+      sourceUrl: bm.sourceUrl,
+      platform: bm.platform,
+      authorHandle: bm.authorHandle,
+      authorName: bm.authorName,
+      title: bm.title,
+      caption: bm.caption,
+      expandedUrls: bm.outgoingLinks || [],
+      candidateQueries: []
+    })
+    return {
+      'Publicación / Recurso': sanitizeFormulaCell(bm.title || bm.caption.slice(0, 80)),
+      'Autor / Origen': sanitizeFormulaCell(`${bm.authorHandle || bm.authorName} (${bm.platform.toUpperCase()})`),
+      'Qué menciona / Para qué sirve': sanitizeFormulaCell(bm.purpose || bm.aiSummary || bm.caption.slice(0, 180)),
+      'Tipo de Recurso': sanitizeFormulaCell(bm.resourceType || 'Aplicación o herramienta'),
+      'El Link de ese Link (Referencia / Hilo)': fb.primaryUrl,
+      'Etiqueta del Link': sanitizeFormulaCell(fb.primaryLabel),
+      'Búsqueda Asistida en GitHub (1-Clic)': fb.githubSearchUrl,
+      'Búsqueda Asistida en Google (1-Clic)': fb.webSearchUrl,
+      'Palabras Clave Extraídas': sanitizeFormulaCell(fb.extractedQuery),
+      'Motivo / Explicación': sanitizeFormulaCell(fb.reasonEs),
+      'URL Original del Post': bm.sourceUrl
+    }
+  })
+  const wsRefs = XLSX.utils.json_to_sheet(refRows)
+  wsRefs['!cols'] = [
+    { wch: 36 },
+    { wch: 24 },
+    { wch: 50 },
+    { wch: 26 },
+    { wch: 44 },
+    { wch: 32 },
+    { wch: 44 },
+    { wch: 44 },
+    { wch: 28 },
+    { wch: 48 },
+    { wch: 40 }
+  ]
+  XLSX.utils.book_append_sheet(wb, wsRefs, 'Links de Referencia y Busqueda')
+
+  // 7. Sheet: Archivos Separados (Otros Temas / No Técnicos)
+  const separatedBms = bookmarks.filter(bm => {
+    if (bm.platform === 'github') return false
+    if (bm.resourceType === 'Archivo separado / Otro tema (No técnico)' || (bm.topics || []).includes('Archivos Separados / Otros Temas')) {
+      return true
+    }
+    const scope = evaluateBookmarkScopeAndOffTopic({
+      caption: bm.caption,
+      title: bm.title,
+      authorName: bm.authorName,
+      authorHandle: bm.authorHandle,
+      platform: bm.platform,
+      outgoingLinks: bm.outgoingLinks,
+      mediaType: bm.mediaType,
+      mediaUrls: bm.mediaUrls,
+      topics: bm.topics
+    })
+    return scope.isOffTopic
+  })
+
+  const sepRows = separatedBms.map(bm => {
+    const scope = evaluateBookmarkScopeAndOffTopic({
+      caption: bm.caption,
+      title: bm.title,
+      authorName: bm.authorName,
+      authorHandle: bm.authorHandle,
+      platform: bm.platform,
+      outgoingLinks: bm.outgoingLinks,
+      mediaType: bm.mediaType,
+      mediaUrls: bm.mediaUrls,
+      topics: bm.topics
+    })
+    return {
+      'Archivo / Publicación Separada': sanitizeFormulaCell(bm.title || bm.caption.slice(0, 80) || bm.id),
+      'Categoría Detectada': sanitizeFormulaCell(scope.categoryLabel),
+      'Motivo de Separación': sanitizeFormulaCell(scope.reasonEs),
+      'Autor / Origen': sanitizeFormulaCell(`${bm.authorHandle || bm.authorName} (${bm.platform.toUpperCase()})`),
+      'Contenido / Texto': sanitizeFormulaCell((bm.caption || '').replace(/\s+/g, ' ').slice(0, 220)),
+      'Multimedia': bm.mediaType !== 'none' ? `${bm.mediaType} (${bm.mediaUrls.length})` : 'Texto / Link',
+      'Enlace Original': (bm.outgoingLinks && bm.outgoingLinks[0]) || bm.sourceUrl
+    }
+  })
+  const wsSep = XLSX.utils.json_to_sheet(sepRows)
+  wsSep['!cols'] = [
+    { wch: 36 },
+    { wch: 32 },
+    { wch: 52 },
+    { wch: 24 },
+    { wch: 50 },
+    { wch: 18 },
+    { wch: 44 }
+  ]
+  XLSX.utils.book_append_sheet(wb, wsSep, 'Archivos Separados (Otros)')
 
   return wb
 }

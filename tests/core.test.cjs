@@ -724,7 +724,7 @@ test('Agent Classifier, Master Excel Workbook & Super-Importer with Deduplicatio
   assert.ok(evaluation.atlasScore >= 8.5)
   assert.ok(evaluation.projectUseCases.length > 20)
 
-  // 4. Master Repositories Excel Workbook (6 sheets including 'Skills en Repositorios' & 21 columns)
+  // 4. Master Repositories Excel Workbook (8 sheets including 'Skills en Repositorios', 'Links de Referencia y Busqueda' & 'Archivos Separados (Otros)')
   const wb = buildRepositoriesWorkbook(allRepos, getAllBookmarks())
   assert.deepEqual(wb.SheetNames, [
     'Catálogo Maestro',
@@ -732,7 +732,9 @@ test('Agent Classifier, Master Excel Workbook & Super-Importer with Deduplicatio
     'Skills, MCPs y Agentes',
     'Por Área y Proyecto',
     'Top Puntaje y Seguridad',
-    'Resumen Ejecutivo'
+    'Resumen Ejecutivo',
+    'Links de Referencia y Busqueda',
+    'Archivos Separados (Otros)'
   ])
   const masterRows = XLSX.utils.sheet_to_json(wb.Sheets['Catálogo Maestro'])
   assert.ok(masterRows.length >= 4)
@@ -751,6 +753,85 @@ test('Agent Classifier, Master Excel Workbook & Super-Importer with Deduplicatio
   assert.equal(sampleSkills[0].skillName, 'docx')
   assert.equal(sampleSkills[0].companyOrAuthor, 'Anthropic (Oficial)')
   assert.equal(sampleSkills[0].recommended, 'Sí — Altamente recomendado')
+})
+
+test('Web Navigator Agent Skills, "El Link de ese Link" Fallback & Off-Topic Separation Criteria', async () => {
+  const {
+    evaluateBookmarkScopeAndOffTopic,
+    skillAiModelWebGrounding,
+    skillBuildFallbackReferenceLink,
+    fallbackReferenceToLinkedResource
+  } = require('../lib/web-navigator-agent.ts')
+  const { inferResourceType } = require('../lib/resource-investigator.ts')
+
+  // 1. Off-topic separation: Personal media / WhatsApp omitted media without technical context
+  const personalPhotoBm = normalizeRow(
+    {
+      url: 'whatsapp://msg/991',
+      caption: 'IMG-20260401-WA0012.jpg (archivo adjunto)',
+      platform: 'whatsapp',
+      mediaType: 'image',
+      mediaUrls: ['IMG-20260401-WA0012.jpg']
+    },
+    'wa-photo'
+  )
+  const photoScope = evaluateBookmarkScopeAndOffTopic(personalPhotoBm)
+  assert.equal(photoScope.isOffTopic, true)
+  assert.equal(photoScope.categoryLabel, 'Fotos y Multimedia Personal')
+  assert.equal(
+    inferResourceType(personalPhotoBm.caption, [], personalPhotoBm.mediaType),
+    'Archivo separado / Otro tema (No técnico)'
+  )
+
+  // 2. Off-topic separation: Casual web game
+  const casualGameBm = normalizeRow(
+    {
+      url: 'https://x.com/user/status/992',
+      caption: 'Did you try mine yet? https://canyonoverdrive.ai-created.com/',
+      outgoingLinks: ['https://canyonoverdrive.ai-created.com/']
+    },
+    'game'
+  )
+  const gameScope = evaluateBookmarkScopeAndOffTopic(casualGameBm)
+  assert.equal(gameScope.isOffTopic, true)
+  assert.equal(gameScope.categoryLabel, 'Juegos Casuales y Entretenimiento')
+
+  // 3. Technical post with indirect tool mention is kept in technical scope & grounded to GitHub repo
+  const indirectTechBm = normalizeRow(
+    {
+      url: 'https://x.com/user/status/993',
+      caption: '刚发现 GitHub 上一个挺猛的开源项目：CLI-Anything。它能把 Blender、GIMP 变成 Agent CLI。'
+    },
+    'cli-anything'
+  )
+  const techScope = evaluateBookmarkScopeAndOffTopic(indirectTechBm)
+  assert.equal(techScope.isOffTopic, false)
+
+  const grounded = await skillAiModelWebGrounding({
+    caption: indirectTechBm.caption,
+    title: indirectTechBm.title,
+    authorHandle: indirectTechBm.authorHandle,
+    externalUrls: []
+  })
+  assert.ok(grounded.discoveredRepos.some(r => r.url === 'https://github.com/HKUDS/CLI-Anything'))
+
+  // 4. "El Link de ese Link" Fallback Reference Link builder when no direct GitHub repo exists
+  const fallbackRef = skillBuildFallbackReferenceLink({
+    sourceUrl: 'https://x.com/dev_author/status/994',
+    platform: 'x',
+    authorHandle: '@dev_author',
+    authorName: 'Dev Author',
+    caption: 'New multi-agent orchestration framework for local LLMs — link in replies below!',
+    expandedUrls: ['https://example-agent-docs.dev/guide'],
+    candidateQueries: ['multi-agent orchestration framework']
+  })
+  assert.equal(fallbackRef.primaryUrl, 'https://example-agent-docs.dev/guide')
+  assert.ok(fallbackRef.githubSearchUrl.startsWith('https://github.com/search?q='))
+  assert.ok(fallbackRef.webSearchUrl.startsWith('https://www.google.com/search?q='))
+
+  const linkedRes = fallbackReferenceToLinkedResource(fallbackRef, ['IA'])
+  assert.ok(linkedRes.id.startsWith('res:ref:'))
+  assert.equal(linkedRes.url, 'https://example-agent-docs.dev/guide')
 })
 
 test('10-Point Suite: WhatsApp Consecutive Note Fusion (#4), Cloud Sync Bundle (#5), Security Inspector (#6), Stack Recommender (#8) & Release Radar (#10)', async () => {

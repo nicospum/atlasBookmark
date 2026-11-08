@@ -53,6 +53,13 @@ export const DEFAULT_TOPIC_RULES: Record<string, string[]> = {
   'Ideas': [
     'idea', 'ideas', 'estrategia', 'strategy', 'hábito', 'atención', 'foco',
     'futuro', 'mente', 'consejo', 'vida', 'second brain', 'workflow', 'bottleneck'
+  ],
+  'Archivos Separados / Otros Temas': [
+    'multimedia omitido', 'image omitted', 'video omitted', 'audio omitted',
+    'foto familiar', 'selfie', 'fútbol', 'futbol', 'messi', 'scaloni',
+    'receta de', 'ingredientes:', 'vacaciones en', 'mercadolibre.com',
+    'comprobante de pago', 'transferencia bancaria', 'turno médico',
+    'canyonoverdrive.ai-created.com', 'sortie.ashutoshai.com'
   ]
 }
 
@@ -396,9 +403,22 @@ export function analyzeContent(
     }
   }
 
-  const finalTopics = detectedTopics.size > 0
+  let finalTopics = detectedTopics.size > 0
     ? Array.from(detectedTopics).slice(0, 6)
     : ['Sin clasificar']
+
+  // Detect if item is clearly off-topic / personal / casual game so it's tagged in "Archivos Separados / Otros Temas"
+  const isCasualGameOrPersonal =
+    allLinks.some(u => /canyonoverdrive\.ai-created\.com|sortie\.ashutoshai\.com|mercadolibre\.com/i.test(u)) ||
+    /(?:^|\b)(?:img[-_]\d{6,}|vid[-_]\d{6,}|ptt[-_]\d{6,}|aud[-_]\d{6,}|<multimedia omitido>|multimedia omitido|image omitted|video omitted|audio omitted|sticker omitted|foto familiar|selfie|f[uú]tbol|messi|scaloni|receta de|ingredientes:|comprobante de pago|transferencia bancaria|turno m[eé]dico|you can play here|did you try mine yet)(?:\b|$)/i.test(
+      combinedSource
+    )
+
+  if (isCasualGameOrPersonal && !allLinks.some(u => /github\.com\//i.test(u))) {
+    finalTopics = Array.from(
+      new Set(['Archivos Separados / Otros Temas', ...finalTopics.filter(t => t !== 'Sin clasificar')])
+    ).slice(0, 6)
+  }
 
   return {
     topics: finalTopics,

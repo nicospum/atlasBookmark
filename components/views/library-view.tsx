@@ -23,7 +23,9 @@ import {
   FileJson,
   RefreshCw,
   CheckCircle2,
-  Clock
+  Clock,
+  FolderArchive,
+  Compass
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -40,6 +42,10 @@ import {
 } from '@/lib/excel-export'
 import { semanticSearchBookmarks } from '@/lib/ai-analyzer'
 import { CANONICAL_RESOURCE_TYPES } from '@/lib/resource-investigator'
+import {
+  evaluateBookmarkScopeAndOffTopic,
+  skillBuildFallbackReferenceLink
+} from '@/lib/web-navigator-agent'
 
 interface LibraryViewProps {
   items: BookmarkItem[]
@@ -79,6 +85,7 @@ export function LibraryView({
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'reviewed'>('all')
   const [hasMediaOnly, setHasMediaOnly] = useState(false)
   const [hasGitHubOnly, setHasGitHubOnly] = useState(false)
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'radar_tecnico' | 'separados'>('all')
   const [sortBy, setSortBy] = useState<'savedDesc' | 'savedAsc' | 'pubDesc'>('savedDesc')
   const [viewMode, setViewMode] = useState<'table' | 'cards'>('table')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -125,8 +132,34 @@ export function LibraryView({
     )
   }
 
+  const isItemOffTopicSeparated = (item: BookmarkItem): boolean => {
+    if (item.platform === 'github') return false
+    if (
+      item.resourceType === 'Archivo separado / Otro tema (No técnico)' ||
+      item.topics.includes('Archivos Separados / Otros Temas')
+    ) {
+      return true
+    }
+    return evaluateBookmarkScopeAndOffTopic({
+      caption: item.caption,
+      title: item.title,
+      authorName: item.authorName,
+      authorHandle: item.authorHandle,
+      platform: item.platform,
+      outgoingLinks: item.outgoingLinks,
+      mediaType: item.mediaType,
+      mediaUrls: item.mediaUrls,
+      topics: item.topics
+    }).isOffTopic
+  }
+
+  const separatedCount = useMemo(() => items.filter(isItemOffTopicSeparated).length, [items])
+  const radarTecnicoCount = items.length - separatedCount
+
   const filteredItems = useMemo(() => {
     const baseFiltered = items.filter(item => {
+      if (scopeFilter === 'radar_tecnico' && isItemOffTopicSeparated(item)) return false
+      if (scopeFilter === 'separados' && !isItemOffTopicSeparated(item)) return false
       if (platformFilter !== 'all' && item.platform !== platformFilter) return false
       if (topicFilter !== 'all' && !item.topics.includes(topicFilter)) return false
       if (resourceTypeFilter !== 'all' && item.resourceType !== resourceTypeFilter) return false
@@ -201,6 +234,7 @@ export function LibraryView({
     statusFilter,
     hasMediaOnly,
     hasGitHubOnly,
+    scopeFilter,
     search,
     searchMode,
     sortBy
@@ -565,6 +599,61 @@ export function LibraryView({
           </div>
         </div>
       )}
+
+      {/* Selector de Alcance: Radar Técnico vs Archivos Separados (Fotos / Otros Temas) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#2c2a42] bg-[#14151e] px-4 py-2.5 text-xs">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 font-medium text-muted-foreground">Criterio de clasificación:</span>
+          <button
+            type="button"
+            onClick={() => {
+              setScopeFilter('all')
+              setCurrentPage(1)
+            }}
+            className={`rounded-md px-3 py-1.5 font-medium transition-colors ${
+              scopeFilter === 'all'
+                ? 'bg-[#28263b] text-[#bfb8ff] border border-[#49436f]'
+                : 'text-muted-foreground hover:bg-[#1b1d27] hover:text-foreground'
+            }`}
+          >
+            Todos ({items.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setScopeFilter('radar_tecnico')
+              setCurrentPage(1)
+            }}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 font-medium transition-colors ${
+              scopeFilter === 'radar_tecnico'
+                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                : 'text-muted-foreground hover:bg-[#1b1d27] hover:text-foreground'
+            }`}
+          >
+            <Compass className="size-3.5 text-emerald-400" />
+            <span>Radar Técnico: IA, Código & Herramientas ({radarTecnicoCount})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setScopeFilter('separados')
+              setCurrentPage(1)
+            }}
+            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 font-medium transition-colors ${
+              scopeFilter === 'separados'
+                ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40'
+                : 'text-muted-foreground hover:bg-[#1b1d27] hover:text-foreground'
+            }`}
+            title="Fotos personales, juegos casuales, deportes, recetas o temas ajenos al trabajo técnico"
+          >
+            <FolderArchive className="size-3.5 text-rose-400" />
+            <span>Archivos Separados / Otros Temas ({separatedCount})</span>
+          </button>
+        </div>
+        <span className="text-[11px] text-muted-foreground">
+          Los archivos que no son de IA/programación se apartan en <strong>Archivos Separados</strong> para mantener limpio tu catálogo.
+        </span>
+      </div>
 
       {/* Barra de Filtros y Búsqueda */}
       <div className="flex flex-col gap-3 rounded-lg border border-border bg-[#16181f] p-4">
@@ -1019,9 +1108,45 @@ export function LibraryView({
                                 </span>
                               </a>
                             ))}
-                            {ghRepos.length === 0 && otherLinks.length === 0 && (
-                              <span className="text-[11px] text-muted-foreground">Sin enlaces externos</span>
-                            )}
+                            {ghRepos.length === 0 &&
+                              (() => {
+                                const fb = skillBuildFallbackReferenceLink({
+                                  sourceUrl: item.sourceUrl,
+                                  platform: item.platform,
+                                  authorHandle: item.authorHandle,
+                                  authorName: item.authorName,
+                                  title: item.title,
+                                  caption: item.caption,
+                                  expandedUrls: item.outgoingLinks || [],
+                                  candidateQueries: []
+                                })
+                                return (
+                                  <div className="mt-0.5 flex flex-col gap-1">
+                                    {otherLinks.length === 0 && (
+                                      <a
+                                        href={fb.primaryUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex w-fit max-w-full items-center gap-1 text-[11px] text-amber-300 hover:underline"
+                                        title={fb.reasonEs}
+                                      >
+                                        <ExternalLink className="size-2.5 shrink-0" />
+                                        <span className="truncate">{fb.primaryLabel}</span>
+                                      </a>
+                                    )}
+                                    <a
+                                      href={fb.githubSearchUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="inline-flex w-fit items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-200 hover:bg-amber-500/20"
+                                      title={`Buscar repositorio en GitHub: "${fb.extractedQuery}"`}
+                                    >
+                                      <Search className="size-2.5 shrink-0" />
+                                      <span>Buscar Repo ({fb.extractedQuery.slice(0, 18)})</span>
+                                    </a>
+                                  </div>
+                                )
+                              })()}
                           </div>
                         </TableCell>
                       )}

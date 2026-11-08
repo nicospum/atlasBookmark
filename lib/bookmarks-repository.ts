@@ -51,6 +51,12 @@ import {
   numericIdFromFullName,
   fetchGitHubRepositoryData
 } from './github-gallery'
+import {
+  runWebNavigatorAgentForBookmark,
+  fallbackReferenceToLinkedResource,
+  evaluateBookmarkScopeAndOffTopic,
+  skillBuildFallbackReferenceLink
+} from './web-navigator-agent'
 
 export interface QueryFilters {
   search?: string
@@ -973,7 +979,7 @@ export async function huntMissingGitHubReposBatch(options: {
   newGalleryReposCount: number
   findings: DeepHuntResultItem[]
 }> {
-  const limit = Math.min(60, Math.max(1, options.limit || 20))
+  const limit = Math.min(150, Math.max(1, options.limit || 25))
   const all = getAllBookmarks()
   const beforeRepoCount = getAllGalleryRepositories().length
 
@@ -1002,7 +1008,7 @@ export async function huntMissingGitHubReposBatch(options: {
   let discoveredReposCount = 0
   const findings: DeepHuntResultItem[] = []
 
-  for (const bm of candidates.slice(0, limit)) {
+  const processCandidate = async (bm: BookmarkItem) => {
     scannedCount++
     let currentCaption = bm.caption || ''
     let currentAuthorName = bm.authorName
@@ -1010,63 +1016,61 @@ export async function huntMissingGitHubReposBatch(options: {
     const currentLinks = new Set<string>(bm.outgoingLinks || [])
     const discoveredForThisBm: DeepHuntResultItem['discoveredRepos'] = []
 
-    // Collect any X status URLs from sourceUrl, outgoingLinks, or inline caption (common in WhatsApp!)
-    const inlineXUrls =
-      currentCaption.match(/https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/gi) || []
-    const xUrlsToHydrate = Array.from(
-      new Set([
-        ...(/^(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/i.test(bm.sourceUrl)
-          ? [bm.sourceUrl]
-          : []),
-        ...Array.from(currentLinks).filter(u =>
-          /^(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+/i.test(u)
-        ),
-        ...inlineXUrls
-      ])
-    )
+    // Step 0: Run Smart Web & Comment Navigator Agent (Off-Topic check + Thread/Comment Jina Reader + AI Grounding + Fallback Link)
+    const navOut = await runWebNavigatorAgentForBookmark(bm, { token: options.token })
 
-    // Step 1: Hydrate X/Twitter status URLs (especially helpful for WhatsApp bare links or truncated tweets)
-    for (const xUrl of xUrlsToHydrate.slice(0, 2)) {
-      const hydrated = await hydrateXStatusUrl(xUrl)
-      if (!hydrated) continue
+    if (navOut.isOffTopic && navOut.offTopicInfo) {
+      const manualFields = new Set(bm.manualFields || [])
+      const nextTopics = manualFields.has('topics')
+        ? bm.topics
+        : Array.from(new Set([...navOut.offTopicInfo.suggestedTopics, ...(bm.topics || []).filter(t => t !== 'Sin clasificar')]))
+      updateBookmark(
+        bm.id,
+        {
+          ...(manualFields.has('resourceType')
+            ? {}
+            : { resourceType: 'Archivo separado / Otro tema (No técnico)' }),
+          topics: nextTopics,
+          ...(manualFields.has('evaluation')
+            ? {}
+            : {
+                evaluation: `Archivo separado (${navOut.offTopicInfo.categoryLabel}): ${navOut.offTopicInfo.reasonEs}`
+              })
+        },
+        false
+      )
+      findings.push({
+        bookmarkId: bm.id,
+        bookmarkTitle: bm.title || bm.id,
+        platform: bm.platform,
+        sourceUrl: bm.sourceUrl,
+        discoveredRepos: [],
+        isOffTopicSeparated: true,
+        offTopicCategory: navOut.offTopicInfo.categoryLabel
+      })
+      return
+    }
 
-      if (
-        hydrated.text &&
-        (currentCaption.trim().length < 50 || /^https?:\/\/\S+$/i.test(currentCaption.trim()))
-      ) {
-        currentCaption = currentCaption.includes(hydrated.text.slice(0, 30))
-          ? currentCaption
-          : `${currentCaption}\n\n[Texto recuperado de X]: ${hydrated.text}`.trim()
-        hydratedPostsCount++
-      }
-      if (hydrated.authorName && (currentAuthorName === 'WhatsApp' || !currentAuthorName)) {
-        currentAuthorName = `${hydrated.authorName} (vía WhatsApp)`
-      }
-      if (hydrated.authorHandle && (currentAuthorHandle === 'WhatsApp' || !currentAuthorHandle)) {
-        currentAuthorHandle = hydrated.authorHandle
-      }
-
-      for (const u of hydrated.expandedUrls) {
-        currentLinks.add(u)
-      }
-      for (const ghUrl of hydrated.discoveredGitHubUrls) {
-        const parsedGh = classifyGitHubUrl(ghUrl)
-        if (parsedGh?.fullName) {
-          discoveredForThisBm.push({
-            fullName: parsedGh.fullName,
-            url: parsedGh.canonicalUrl,
-            description: `Hallado al hidratar post de X (${xUrl})`,
-            discoveryMethod: 'tweet_hydration',
-            confidence: 'confirmado'
-          })
-        }
+    if (navOut.hydratedText && navOut.hydratedText !== currentCaption) {
+      currentCaption = navOut.hydratedText
+      hydratedPostsCount++
+    }
+    if (navOut.hydratedAuthorName) currentAuthorName = navOut.hydratedAuthorName
+    if (navOut.hydratedAuthorHandle) currentAuthorHandle = navOut.hydratedAuthorHandle
+    for (const u of navOut.expandedLinks) currentLinks.add(u)
+    for (const r of navOut.discoveredRepos) {
+      if (!discoveredForThisBm.some(d => d.fullName.toLowerCase() === r.fullName.toLowerCase())) {
+        discoveredForThisBm.push(r)
       }
     }
 
-    // Step 2: Expand shortlinks & scrape external landing pages for GitHub links
-    const nonSocialLinks = Array.from(currentLinks).filter(
-      u => !/^(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com|instagram\.com)\//i.test(u)
-    )
+    // Step 2: Expand shortlinks & scrape external landing pages for GitHub links (only if not yet found)
+    const nonSocialLinks =
+      discoveredForThisBm.length === 0
+        ? Array.from(currentLinks).filter(
+            u => !/^(?:https?:\/\/)?(?:www\.)?(?:x\.com|twitter\.com|instagram\.com)\//i.test(u)
+          )
+        : []
     for (const extUrl of nonSocialLinks.slice(0, 3)) {
       const ghDirect = classifyGitHubUrl(extUrl)
       if (ghDirect?.kind === 'github_repo' && ghDirect.fullName) {
@@ -1125,9 +1129,32 @@ export async function huntMissingGitHubReposBatch(options: {
       }
     }
 
-    if (discoveredForThisBm.length > 0 || currentCaption !== bm.caption) {
+    const fallbackRef =
+      discoveredForThisBm.length === 0
+        ? navOut.fallbackReference ||
+          skillBuildFallbackReferenceLink({
+            sourceUrl: bm.sourceUrl,
+            platform: bm.platform,
+            authorHandle: currentAuthorHandle,
+            authorName: currentAuthorName,
+            title: bm.title,
+            caption: currentCaption,
+            expandedUrls: Array.from(currentLinks),
+            candidateQueries: []
+          })
+        : undefined
+
+    if (discoveredForThisBm.length > 0 || currentCaption !== bm.caption || fallbackRef) {
       discoveredReposCount += discoveredForThisBm.length
       const updatedLinks = Array.from(currentLinks)
+      const existingWithFallback = [...(bm.resources || [])]
+      if (fallbackRef) {
+        const fbRes = fallbackReferenceToLinkedResource(fallbackRef, bm.topics)
+        if (!existingWithFallback.some(r => (r.resolvedUrl || r.url) === fbRes.resolvedUrl)) {
+          existingWithFallback.push(fbRes)
+        }
+      }
+
       const syn = synthesizeBookmarkFields({
         caption: currentCaption,
         authorName: currentAuthorName,
@@ -1136,15 +1163,28 @@ export async function huntMissingGitHubReposBatch(options: {
         outgoingLinks: updatedLinks,
         topics: bm.topics,
         entities: bm.entities,
-        existingResources: bm.resources
+        existingResources: existingWithFallback
       })
 
       const manualFields = new Set(bm.manualFields || [])
       const huntNote =
         discoveredForThisBm.length > 0
           ? `[Cazador de Repos]: ${discoveredForThisBm
-              .map(d => `${d.fullName} (${d.discoveryMethod === 'github_search_inference' ? 'búsqueda GitHub' : 'hidratación de link'})`)
+              .map(
+                d =>
+                  `${d.fullName} (${
+                    d.discoveryMethod === 'ai_web_grounding'
+                      ? 'Agente IA / Web'
+                      : d.discoveryMethod === 'jina_reader_thread'
+                      ? 'hilo/comentario'
+                      : d.discoveryMethod === 'github_search_inference'
+                      ? 'búsqueda GitHub'
+                      : 'hidratación de link'
+                  })`
+              )
               .join(', ')}`
+          : fallbackRef
+          ? `[Link de Referencia / Búsqueda Asistida]: ${fallbackRef.primaryLabel} → ${fallbackRef.primaryUrl} | Buscar en GitHub: ${fallbackRef.githubSearchUrl}`
           : ''
 
       updateBookmark(
@@ -1160,23 +1200,31 @@ export async function huntMissingGitHubReposBatch(options: {
           ...(manualFields.has('purpose') ? {} : { purpose: syn.purpose, aiSummary: syn.purpose }),
           ...(manualFields.has('resourceType') ? {} : { resourceType: syn.resourceType }),
           ...(manualFields.has('evaluation') ? {} : { evaluation: syn.evaluation }),
-          ...(huntNote && !(bm.notes || '').includes(huntNote)
+          ...(huntNote && !(bm.notes || '').includes(huntNote.slice(0, 38))
             ? { notes: [bm.notes, huntNote].filter(Boolean).join('\n') }
             : {})
         },
         false
       )
 
-      if (discoveredForThisBm.length > 0) {
+      if (discoveredForThisBm.length > 0 || fallbackRef) {
         findings.push({
           bookmarkId: bm.id,
           bookmarkTitle: syn.title || bm.title || bm.id,
           platform: bm.platform,
           sourceUrl: bm.sourceUrl,
-          discoveredRepos: discoveredForThisBm
+          discoveredRepos: discoveredForThisBm,
+          fallbackReference: fallbackRef
         })
       }
     }
+  }
+
+  const sliceToProcess = candidates.slice(0, limit)
+  const CONCURRENCY = 8
+  for (let i = 0; i < sliceToProcess.length; i += CONCURRENCY) {
+    const chunk = sliceToProcess.slice(i, i + CONCURRENCY)
+    await Promise.all(chunk.map(bm => processCandidate(bm)))
   }
 
   syncBookmarksToGitHubGallery(true)
