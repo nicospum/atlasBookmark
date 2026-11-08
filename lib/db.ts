@@ -17,6 +17,7 @@ import { normalizeRow } from './importer'
 import { synthesizeBookmarkFields } from './resource-investigator'
 import {
   buildDeterministicSpanishExplanations,
+  isGenericRepoDescription,
   numericIdFromFullName,
   parseGitHubUrl
 } from './github-gallery'
@@ -707,9 +708,23 @@ export function upsertGalleryRepository(repo: GalleryRepository, customOrder = 0
     new Set([...(existing?.topics || []), ...(repo.topics || [])].filter(Boolean))
   )
 
+  const bestRawDesc = !isGenericRepoDescription(repo.description)
+    ? repo.description!
+    : !isGenericRepoDescription(existing?.description)
+    ? existing!.description
+    : ''
+  const bestReadme = repo.readme || existing?.readme || ''
+
   const synth = buildDeterministicSpanishExplanations({
     ...existing,
     ...repo,
+    description: bestRawDesc,
+    readme: bestReadme,
+    shortExplanationEs: !isGenericRepoDescription(repo.shortExplanationEs)
+      ? repo.shortExplanationEs
+      : !isGenericRepoDescription(existing?.shortExplanationEs)
+      ? existing?.shortExplanationEs
+      : '',
     owner: repo.owner,
     name: repo.name,
     topics: mergedTopics
@@ -722,15 +737,29 @@ export function upsertGalleryRepository(repo: GalleryRepository, customOrder = 0
     fullName,
     url: repo.url || `https://github.com/${fullName}`,
     avatarUrl: repo.avatarUrl || existing?.avatarUrl || `https://github.com/${repo.owner}.png?size=128`,
-    description:
-      repo.description && repo.description !== 'Sin descripción provista.'
-        ? repo.description
-        : existing?.description || 'Sin descripción provista.',
-    explanation: repo.explanation || existing?.explanation || synth.shortExplanationEs,
-    shortExplanationEs: repo.shortExplanationEs || existing?.shortExplanationEs || synth.shortExplanationEs,
-    longExplanationEs: repo.longExplanationEs || existing?.longExplanationEs || synth.longExplanationEs,
+    description: bestRawDesc || synth.effectiveDescription || 'Sin descripción provista.',
+    explanation: !isGenericRepoDescription(repo.explanation)
+      ? repo.explanation!
+      : !isGenericRepoDescription(existing?.explanation)
+      ? existing!.explanation!
+      : synth.shortExplanationEs,
+    shortExplanationEs: !isGenericRepoDescription(repo.shortExplanationEs)
+      ? repo.shortExplanationEs!
+      : !isGenericRepoDescription(existing?.shortExplanationEs)
+      ? existing!.shortExplanationEs!
+      : synth.shortExplanationEs,
+    longExplanationEs:
+      repo.longExplanationEs &&
+      !repo.longExplanationEs.includes('referenciado en tus guardados') &&
+      !repo.longExplanationEs.includes('detectado en tus guardados')
+        ? repo.longExplanationEs
+        : existing?.longExplanationEs &&
+          !existing.longExplanationEs.includes('referenciado en tus guardados') &&
+          !existing.longExplanationEs.includes('detectado en tus guardados')
+        ? existing.longExplanationEs
+        : synth.longExplanationEs,
     explanationGeneratedAt: repo.explanationGeneratedAt || existing?.explanationGeneratedAt || new Date().toISOString(),
-    readme: repo.readme || existing?.readme || '',
+    readme: bestReadme,
     imageUrl:
       repo.imageSource === 'readme'
         ? repo.imageUrl
@@ -995,6 +1024,7 @@ export function syncBookmarksToGitHubGallery(force = true): { totalRepos: number
       }
 
       if (
+        totalReposInBookmark === 1 &&
         entry.resourceType === 'Otro / pendiente de clasificar' &&
         bm.resourceType &&
         bm.resourceType !== 'Otro / pendiente de clasificar'
@@ -1031,19 +1061,7 @@ export function syncBookmarksToGitHubGallery(force = true): { totalRepos: number
     const tx = db.transaction(() => {
       for (const [, agg] of aggMap.entries()) {
         const topicsArr = Array.from(agg.topics).slice(0, 10)
-        const desc = agg.description || agg.purpose || `Proyecto ${agg.fullName} referenciado en tus guardados.`
-        const synth = buildDeterministicSpanishExplanations({
-          owner: agg.owner,
-          name: agg.name,
-          description: desc,
-          stars: agg.stars,
-          license: agg.license,
-          primaryLanguage: agg.primaryLanguage,
-          topics: topicsArr
-        })
-
-        const finalType =
-          agg.resourceType !== 'Otro / pendiente de clasificar' ? agg.resourceType : synth.resourceType
+        const desc = agg.description || agg.purpose || ''
 
         upsertGalleryRepository({
           id: numericIdFromFullName(agg.fullName),
@@ -1053,9 +1071,9 @@ export function syncBookmarksToGitHubGallery(force = true): { totalRepos: number
           url: `https://github.com/${agg.fullName}`,
           avatarUrl: `https://github.com/${agg.owner}.png?size=128`,
           description: desc,
-          explanation: agg.purpose || synth.shortExplanationEs,
-          shortExplanationEs: agg.purpose || synth.shortExplanationEs,
-          longExplanationEs: synth.longExplanationEs,
+          explanation: agg.purpose || '',
+          shortExplanationEs: agg.purpose || '',
+          longExplanationEs: '',
           imageUrl: `https://opengraph.githubassets.com/1/${agg.owner}/${agg.name}`,
           imageSource: 'opengraph',
           stars: agg.stars,
@@ -1074,7 +1092,7 @@ export function syncBookmarksToGitHubGallery(force = true): { totalRepos: number
           latestRelease: null,
           homepage: null,
           defaultBranch: 'main',
-          resourceType: finalType,
+          resourceType: agg.resourceType,
           linkedBookmarkIds: Array.from(agg.linkedBookmarkIds)
         })
       }

@@ -565,7 +565,7 @@ export async function POST(request: Request) {
           success: true,
           mode: 'push',
           gistId: pushed.gistId,
-          gistUrl: pushed.gistUrl,
+          gistUrl: pushed.htmlUrl,
           updatedAt: pushed.updatedAt,
           counts: bundle.counts
         })

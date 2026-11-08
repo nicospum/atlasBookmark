@@ -1,5 +1,9 @@
 import { BookmarkItem, GalleryRepository } from './types'
-import { evaluateAndClassifyRepository, extractInstallAndSetupSnippets } from './github-gallery'
+import {
+  evaluateAndClassifyRepository,
+  extractInstallAndSetupSnippets,
+  isGenericRepoDescription
+} from './github-gallery'
 
 export type SkillRecommendationVerdict =
   | 'Sí — Altamente recomendado'
@@ -191,11 +195,17 @@ function translateOrEnhanceSkillDescriptionEs(
   }
 
   const cleaned = cleanMarkdownInline(rawDesc)
-  if (!cleaned || cleaned.length < 8) {
+  if (!cleaned || cleaned.length < 8 || isGenericRepoDescription(cleaned)) {
+    const fallbackRepoText = !isGenericRepoDescription(repo.shortExplanationEs)
+      ? repo.shortExplanationEs
+      : !isGenericRepoDescription(repo.explanation)
+      ? repo.explanation
+      : !isGenericRepoDescription(repo.description)
+      ? repo.description
+      : ''
     return {
       whatItDoesEs:
-        repo.shortExplanationEs ||
-        repo.explanation ||
+        fallbackRepoText ||
         `Skill especializado (${skillName}) incluido en ${repo.fullName} para potenciar flujos de ${areaCategory}.`,
       capabilitiesEs: inferCapabilitiesByArea(skillName, cleaned, areaCategory, repo)
     }
@@ -215,7 +225,13 @@ function translateOrEnhanceSkillDescriptionEs(
 }
 
 function translateEnglishSkillPhraseToSpanish(skillName: string, englishDesc: string, repoFullName: string): string {
-  const d = englishDesc.trim()
+  const d = englishDesc
+    .trim()
+    .replace(
+      /^(?:Skill|Agente o workflow|Servidor MCP o conector|Librería, framework o SDK|Aplicación o herramienta|Modelo o dataset|Artículo, tutorial, investigación o material educativo):\s*/i,
+      ''
+    )
+    .trim()
   const lower = d.toLowerCase()
 
   const prefixMap: Array<[RegExp, string]> = [

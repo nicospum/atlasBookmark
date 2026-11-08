@@ -439,6 +439,10 @@ export interface StackRecommendationItem {
   fullName: string
   url: string
   roleInProject: string
+  roleInStack?: string
+  resourceType?: ResourceType | string
+  areaCategory?: string
+  companyOrAuthor?: string
   whySelectedEs: string
   atlasScore: number
   securityGrade: 'Alto' | 'Medio' | 'Precaución'
@@ -448,10 +452,13 @@ export interface StackRecommendationItem {
 
 export interface StackRecommendationResult {
   projectIdea: string
+  idea?: string
   suggestedName: string
+  projectName?: string
   architectureSummaryEs: string
   recommendedRepos: StackRecommendationItem[]
-  compatibilityNotesEs: string[]
+  selectedRepos?: StackRecommendationItem[]
+  compatibilityNotesEs: string[] | string
   generatedBlueprint: ProjectBlueprint
   masterPromptMarkdown: string
 }
@@ -466,7 +473,11 @@ export interface ReleaseRadarItem {
   stars: number
   atlasScore: number
   latestRelease?: GalleryRepoRelease | null
+  latestReleaseTag?: string | null
+  latestReleaseDate?: string | null
   pushedAt: string
   daysSincePush: number
+  daysSinceLastPush?: number
   highlightReasonEs: string
+  shortExplanationEs?: string
 }

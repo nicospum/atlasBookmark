@@ -4,6 +4,7 @@ import {
   extractReadmeImage,
   fetchGitHubRepositoryData,
   generateExplanationFromReadme,
+  isGenericRepoDescription,
   numericIdFromFullName
 } from './github-gallery'
 import type { GalleryRepoLanguage, GalleryRepository } from './types'
@@ -321,7 +322,7 @@ export async function hydrateSingleRepoWithoutApiQuota(
   ])
 
   let htmlText = ''
-  if (!unghData) {
+  if (!unghData || !unghData.description) {
     try {
       const res = await fetch(pageUrl, {
         headers: BROWSER_HTML_HEADERS,
@@ -361,13 +362,16 @@ export async function hydrateSingleRepoWithoutApiQuota(
   const defaultBranch =
     unghData?.defaultBranch || rawReadmeResult.branchUsed || repo.defaultBranch || 'main'
 
+  const readmeSummary = readmeText ? generateExplanationFromReadme('', readmeText) : ''
+  const cleanReadmeSummary =
+    !isGenericRepoDescription(readmeSummary) && !/[\u4e00-\u9fff]/.test(readmeSummary)
+      ? readmeSummary
+      : ''
+
   const effectiveDescription =
     parsedDesc ||
-    (repo.description &&
-    repo.description !== 'Sin descripción provista.' &&
-    !repo.description.includes('detectado en tus guardados')
-      ? repo.description
-      : '') ||
+    (!isGenericRepoDescription(repo.description) ? repo.description : '') ||
+    cleanReadmeSummary ||
     'Sin descripción provista.'
 
   const mergedTopics = Array.from(new Set([...parsedTopics, ...(repo.topics || [])])).slice(0, 8)
@@ -400,6 +404,7 @@ export async function hydrateSingleRepoWithoutApiQuota(
     avatarUrl: repo.avatarUrl || `https://github.com/${owner}.png?size=128`,
     description: effectiveDescription,
     explanation,
+    shortExplanationEs: '',
     readme: readmeText,
     imageUrl,
     imageSource,
@@ -416,6 +421,10 @@ export async function hydrateSingleRepoWithoutApiQuota(
   }
 
   const synth = buildDeterministicSpanishExplanations(hydratedRepo)
+  hydratedRepo.description =
+    !isGenericRepoDescription(hydratedRepo.description)
+      ? hydratedRepo.description
+      : synth.effectiveDescription
   hydratedRepo.shortExplanationEs = synth.shortExplanationEs
   hydratedRepo.longExplanationEs = synth.longExplanationEs
   hydratedRepo.explanation = synth.shortExplanationEs

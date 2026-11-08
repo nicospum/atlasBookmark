@@ -467,6 +467,9 @@ export function insertBookmarksBatch(
 
 export type BookmarkPatch = Partial<{
   reviewed: boolean
+  caption: string
+  authorName: string
+  authorHandle: string
   title: string
   purpose: string
   resourceType: ResourceType
@@ -503,6 +506,9 @@ function applyPatchToItem(existing: BookmarkItem, patch: BookmarkPatch, isManual
   return {
     ...existing,
     ...(patch.reviewed !== undefined ? { reviewed: patch.reviewed } : {}),
+    ...(patch.caption !== undefined ? { caption: patch.caption } : {}),
+    ...(patch.authorName !== undefined ? { authorName: patch.authorName } : {}),
+    ...(patch.authorHandle !== undefined ? { authorHandle: patch.authorHandle } : {}),
     ...(patch.title !== undefined ? { title: patch.title } : {}),
     ...(patch.purpose !== undefined ? { purpose: patch.purpose } : {}),
     ...(patch.resourceType !== undefined ? { resourceType: patch.resourceType } : {}),
@@ -834,13 +840,18 @@ export function saveGalleryRepoWithBookmark(
     id: `res-gh-${fullNameKey.replace(/[^a-z0-9]/g, '-')}`,
     url: `https://github.com/${repo.owner}/${repo.name}`,
     resolvedUrl: `https://github.com/${repo.owner}/${repo.name}`,
+    domain: 'github.com',
     kind: 'github_repo',
     name: repo.name,
     fullName: `${repo.owner}/${repo.name}`,
     description: repo.shortExplanationEs || repo.description || '',
+    purpose: repo.shortExplanationEs || repo.description || '',
+    resourceType: repo.resourceType || 'Otro / pendiente de clasificar',
+    topics: repo.topics || [],
     stars: repo.stars,
     license: repo.license || undefined,
     verificationStatus: 'confirmed',
+    provenanceChain: [`https://github.com/${repo.owner}/${repo.name}`],
     evidenceBasis: 'github_api'
   })
 

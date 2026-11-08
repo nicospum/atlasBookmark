@@ -1724,7 +1724,7 @@ export function ReposView({
         }
         setStatusBanner({
           type: 'ok',
-          text: `🚀 Stack recomendado creado: "${rec.projectName}" con ${rec.selectedRepos.length} repositorios óptimos de tu catálogo y su PROMPT_MAESTRO.md listo.`
+          text: `🚀 Stack recomendado creado: "${rec.projectName || rec.suggestedName}" con ${(rec.selectedRepos || rec.recommendedRepos || []).length} repositorios óptimos de tu catálogo y su PROMPT_MAESTRO.md listo.`
         })
       }
     } catch {} finally {
@@ -2952,7 +2952,7 @@ export function ReposView({
                     >
                       <div className="relative h-[150px] w-full overflow-hidden bg-[#0e1016] border-b border-border/60">
                         <img
-                          src={repo.imageUrl}
+                          src={repo.imageUrl || undefined}
                           alt={repo.fullName}
                           loading="lazy"
                           className="h-full w-full object-cover"
@@ -3076,19 +3076,19 @@ export function ReposView({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h4 className="text-xs font-semibold text-emerald-300">
-                      ✨ {stackRecommendation.projectName}
+                      ✨ {stackRecommendation.projectName || stackRecommendation.suggestedName}
                     </h4>
                     <p className="mt-0.5 text-xs text-zinc-200">
                       {stackRecommendation.architectureSummaryEs}
                     </p>
                   </div>
                   <Badge className="bg-emerald-950/60 text-emerald-300 border-emerald-600/40 text-[10px]">
-                    {stackRecommendation.selectedRepos.length} piezas seleccionadas
+                    {(stackRecommendation.selectedRepos || stackRecommendation.recommendedRepos || []).length} piezas seleccionadas
                   </Badge>
                 </div>
 
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {stackRecommendation.selectedRepos.map(item => (
+                  {(stackRecommendation.selectedRepos || stackRecommendation.recommendedRepos || []).map(item => (
                     <div
                       key={item.fullName}
                       className="rounded-lg border border-white/10 bg-black/30 p-2.5 text-xs space-y-1"
@@ -3832,7 +3832,7 @@ export function ReposView({
                       <div
                         key={lang.name}
                         style={{
-                          width: `${Math.max(lang.percentage, 2)}%`,
+                          width: `${Math.max(lang.percentage ?? 0, 2)}%`,
                           backgroundColor: getLanguageColor(lang.name)
                         }}
                         title={`${lang.name}: ${lang.percentage}%`}

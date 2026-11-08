@@ -19,7 +19,7 @@ export function SourcesView({ items, onSelectAuthor, onOpenDetail }: SourcesView
     const map: Record<string, {
       name: string
       handle: string
-      platform: 'x' | 'instagram'
+      platform: BookmarkItem['platform']
       avatar?: string
       count: number
       items: BookmarkItem[]

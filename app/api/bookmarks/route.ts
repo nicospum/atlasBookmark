@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
           }
           return normalizeRow(entry, body.filename || body.captureSource || 'browser_extension')
         })
-        .filter((i): i is BookmarkItem => Boolean(i))
+        .filter((i: BookmarkItem | null | undefined): i is BookmarkItem => Boolean(i))
 
       const result = insertBookmarksBatch(normalizedItems, {
         filename: body.filename || 'import-batch',

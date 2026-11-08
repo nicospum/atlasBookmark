@@ -541,16 +541,27 @@ export function extractReadmeImage(
   return null
 }
 
+export function isGenericRepoDescription(text?: string | null): boolean {
+  if (!text) return true
+  const t = text.trim()
+  if (t.length < 12) return true
+  return /Sin descripci|referenciado en tus guardados|detectado en tus guardados|importado a la galer|^Repositorio en GitHub|^Repositorio de GitHub sin descripci|^Explorá el código fuente|enfocado en\s+[a-z0-9_-]+\.$/i.test(
+    t
+  )
+}
+
 export function generateExplanationFromReadme(description: string, readmeText: string): string {
-  const cleanDesc = (description || '').trim()
+  const cleanDesc = !isGenericRepoDescription(description) ? (description || '').trim() : ''
   if (!readmeText) {
     return cleanDesc || 'Repositorio de GitHub sin descripción detallada disponible.'
   }
 
   let cleaned = readmeText
+    .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/```[\s\S]*?```/g, '')
     .replace(/`[^`]+`/g, '')
     .replace(/^#+\s+.*$/gm, '')
+    .replace(/\[!\[.*?\]\(.*?\)\]\(.*?\)/g, '')
     .replace(/!\[.*?\]\(.*?\)/g, '')
     .replace(/<img[^>]*>/gi, '')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
@@ -558,15 +569,24 @@ export function generateExplanationFromReadme(description: string, readmeText: s
 
   const paragraphs = cleaned
     .split(/\n\s*\n/)
-    .map(p => p.trim().replace(/\s+/g, ' '))
+    .map(p =>
+      p
+        .replace(/^[>*\-\s]+/gm, '')
+        .trim()
+        .replace(/\s+/g, ' ')
+    )
     .filter(p => {
-      if (p.length < 30) return false
+      if (p.length < 28) return false
+      if (/[\u4e00-\u9fff]/.test(p) && !/[a-zA-Z]{15,}/.test(p)) return false
       if (
         p.startsWith('|') ||
         p.includes('Table of Contents') ||
         p.includes('License:') ||
         p.startsWith('npm install') ||
-        p.startsWith('pip install')
+        p.startsWith('pip install') ||
+        p.startsWith('git clone') ||
+        /^https?:\/\/\S+$/i.test(p) ||
+        /^(?:English|中文|日本語|한국어|Français|Español|Deutsch|Русский)[\s|·•/]+/i.test(p)
       ) {
         return false
       }
@@ -577,7 +597,7 @@ export function generateExplanationFromReadme(description: string, readmeText: s
     const firstPara = paragraphs[0]
     if (firstPara.length <= 250) return firstPara
     const sentenceEnd = firstPara.indexOf('. ')
-    if (sentenceEnd > 40 && sentenceEnd < 260) {
+    if (sentenceEnd > 35 && sentenceEnd < 260) {
       return firstPara.slice(0, sentenceEnd + 1)
     }
     return `${firstPara.slice(0, 240)}...`
@@ -590,12 +610,19 @@ export function buildDeterministicSpanishExplanations(repo: Partial<GalleryRepos
   shortExplanationEs: string
   longExplanationEs: string
   resourceType: ResourceType
+  effectiveDescription: string
 } {
   const fullName = `${repo.owner}/${repo.name}`
   const rawDesc = (repo.description || '').trim()
   const hasCjk = /[\u4e00-\u9fff]/.test(rawDesc)
-  const desc = hasCjk ? '' : rawDesc
-  const readmeExtract = generateExplanationFromReadme(desc, repo.readme || '')
+  const cleanRawDesc = !hasCjk && !isGenericRepoDescription(rawDesc) ? rawDesc : ''
+  const readmeExtractRaw = generateExplanationFromReadme(cleanRawDesc, repo.readme || '')
+  const readmeExtract =
+    !isGenericRepoDescription(readmeExtractRaw) && !/[\u4e00-\u9fff]/.test(readmeExtractRaw)
+      ? readmeExtractRaw
+      : ''
+
+  const desc = cleanRawDesc || readmeExtract
   const langList =
     Array.isArray(repo.languages) && repo.languages.length > 0
       ? repo.languages.map(l => `${l.name}${l.percentage ? ` (${l.percentage}%)` : ''}`).join(', ')
@@ -603,26 +630,36 @@ export function buildDeterministicSpanishExplanations(repo: Partial<GalleryRepos
   const topics = Array.isArray(repo.topics) ? repo.topics : []
 
   const resourceType = inferResourceType(
-    `${fullName} ${rawDesc} ${readmeExtract} ${topics.join(' ')}`,
+    `${fullName} ${desc} ${readmeExtract} ${topics.join(' ')} ${(repo.readme || '').slice(0, 1200)}`,
     [`https://github.com/${fullName}`],
     topics
   )
 
   const readableSlug = repo.name.replace(/[-_]+/g, ' ')
   const cleanProvidedShort =
-    repo.shortExplanationEs && !/[\u4e00-\u9fff]/.test(repo.shortExplanationEs)
+    repo.shortExplanationEs &&
+    !/[\u4e00-\u9fff]/.test(repo.shortExplanationEs) &&
+    !isGenericRepoDescription(repo.shortExplanationEs)
       ? repo.shortExplanationEs
       : ''
 
   const shortExplanationEs =
     cleanProvidedShort ||
-    (desc && desc !== 'Sin descripción provista.'
+    (desc
       ? desc.startsWith(resourceType)
         ? desc
         : `${resourceType}: ${desc}`
-      : `${resourceType} en GitHub (${fullName}) enfocado en ${readableSlug}${
-          topics.length > 0 ? ` (${topics.slice(0, 3).join(', ')})` : ''
+      : `${resourceType} open-source (${fullName})${
+          repo.primaryLanguage ? ` en ${repo.primaryLanguage}` : ''
+        } para ${readableSlug}${
+          topics.length > 0 ? ` (${topics.slice(0, 4).join(', ')})` : ''
         }.`)
+
+  const effectiveDescription =
+    desc ||
+    `${resourceType} open-source (${fullName})${
+      repo.primaryLanguage ? ` desarrollado en ${repo.primaryLanguage}` : ''
+    }${topics.length > 0 ? ` — ${topics.slice(0, 4).join(', ')}` : ''}.`
 
   const longParts: string[] = []
   longParts.push(
@@ -630,7 +667,7 @@ export function buildDeterministicSpanishExplanations(repo: Partial<GalleryRepos
       repo.primaryLanguage ? `, desarrollado principalmente en ${repo.primaryLanguage}` : ''
     }.`
   )
-  if (desc && desc !== 'Sin descripción provista.') {
+  if (desc) {
     longParts.push(`Propósito oficial: ${desc}`)
   }
   if (readmeExtract && readmeExtract !== desc) {
@@ -659,7 +696,8 @@ export function buildDeterministicSpanishExplanations(repo: Partial<GalleryRepos
   return {
     shortExplanationEs: shortExplanationEs.slice(0, 280),
     longExplanationEs: longParts.join('\n\n'),
-    resourceType
+    resourceType,
+    effectiveDescription: effectiveDescription.slice(0, 280)
   }
 }
 
@@ -2110,18 +2148,23 @@ export function evaluateAndClassifyRepository(
   })
 
   const nonSyntheticBms = linkedForRepo.filter(bm => bm.platform !== 'github')
+  const singleRepoBms = nonSyntheticBms.filter(
+    bm => (bm.resources || []).filter(r => r.kind === 'github_repo').length <= 2
+  )
 
   // 1. Qué es y para qué sirve (whatIsItEs)
   const synth = buildDeterministicSpanishExplanations(repo)
   const rType = repo.resourceType || synth.resourceType
-  let whatIsItEs = (repo.shortExplanationEs || repo.explanation || synth.shortExplanationEs || '').trim()
-  if (
-    (!whatIsItEs ||
-      whatIsItEs.includes('detectado en tus guardados') ||
-      whatIsItEs.includes('enfocado en')) &&
-    nonSyntheticBms.length > 0
-  ) {
-    const bestBm = nonSyntheticBms.find(b => b.purpose && b.purpose.length > 25) || nonSyntheticBms[0]
+  let whatIsItEs = (
+    !isGenericRepoDescription(repo.shortExplanationEs)
+      ? repo.shortExplanationEs
+      : !isGenericRepoDescription(repo.explanation)
+      ? repo.explanation
+      : synth.shortExplanationEs
+  )?.trim() || ''
+
+  if (isGenericRepoDescription(whatIsItEs) && singleRepoBms.length > 0) {
+    const bestBm = singleRepoBms.find(b => b.purpose && b.purpose.length > 25) || singleRepoBms[0]
     if (bestBm?.purpose) {
       whatIsItEs = bestBm.purpose
     } else if (bestBm?.caption) {
@@ -2136,10 +2179,10 @@ export function evaluateAndClassifyRepository(
   const combinedSignal = [
     fullName,
     whatIsItEs,
-    repo.description || '',
+    !isGenericRepoDescription(repo.description) ? repo.description || '' : '',
     ...(repo.topics || []),
-    ...nonSyntheticBms.flatMap(b => b.topics || []),
-    ...nonSyntheticBms.map(b => b.caption || '')
+    ...singleRepoBms.flatMap(b => b.topics || []),
+    ...singleRepoBms.map(b => b.caption || '')
   ]
     .join(' ')
     .toLowerCase()
