@@ -37,6 +37,8 @@ import {
   pushSyncBundleToGitHubGist,
   pullSyncBundleFromGitHubGist
 } from '@/lib/cloud-sync'
+import { getAllSkillNoteOverrides, upsertSkillNoteOverride } from '@/lib/db'
+import { extractAllSkillsFromRepositories } from '@/lib/repo-skills-extractor'
 import type { AiProviderId, GalleryRepository, ProjectBlueprint, ResourceType } from '@/lib/types'
 
 function enrichReposWithAgentEvaluation(repos: GalleryRepository[]): GalleryRepository[] {
@@ -67,13 +69,21 @@ export async function OPTIONS() {
 export async function GET() {
   try {
     syncBookmarksToGitHubGallery()
+    const bookmarks = getAllBookmarks()
     const repositories = enrichReposWithAgentEvaluation(getAllGalleryRepositories())
     const blueprints = getAllProjectBlueprints()
+    const skills = extractAllSkillsFromRepositories(
+      repositories,
+      bookmarks,
+      getAllSkillNoteOverrides()
+    )
     return jsonWithCors({
       success: true,
       repositories,
       blueprints,
-      total: repositories.length
+      skills,
+      total: repositories.length,
+      totalSkills: skills.length
     })
   } catch (error: any) {
     return jsonWithCors(
@@ -588,6 +598,19 @@ export async function POST(request: Request) {
           blueprints: getAllProjectBlueprints()
         })
       }
+    }
+
+    if (action === 'saveSkillNote') {
+      const skillId = String(body?.skillId || '').trim()
+      if (!skillId) {
+        return jsonWithCors({ success: false, error: 'Falta skillId.' }, { status: 400 })
+      }
+      const saved = upsertSkillNoteOverride({
+        skillId,
+        comments: body?.comments !== undefined ? String(body.comments) : undefined,
+        recommended: body?.recommended !== undefined ? String(body.recommended) : undefined
+      })
+      return jsonWithCors({ success: true, note: saved })
     }
 
     return jsonWithCors({ success: false, error: `Acción no soportada: ${action}` }, { status: 400 })

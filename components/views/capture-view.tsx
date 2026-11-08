@@ -25,13 +25,16 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { ImportHistoryEntry, ImportResult, WhatsAppParsedMessage } from '@/lib/types'
+import { BookmarkItem, ImportHistoryEntry, ImportResult, WhatsAppParsedMessage } from '@/lib/types'
+import { ReposSkillsExcelTable } from '@/components/repos-skills-excel-table'
 
 interface CaptureViewProps {
   onRefresh: () => Promise<void>
   onNavigateLibrary: () => void
   totalCount: number
   history: ImportHistoryEntry[]
+  bookmarks?: BookmarkItem[]
+  onOpenRepoDetail?: (repoFullName: string) => void
 }
 
 const CONSOLE_CAPTURE_SNIPPET = `(() => {
@@ -85,7 +88,9 @@ export function CaptureView({
   onRefresh,
   onNavigateLibrary,
   totalCount,
-  history
+  history,
+  bookmarks = [],
+  onOpenRepoDetail
 }: CaptureViewProps) {
   const [activeTab, setActiveTab] = useState<'file' | 'whatsapp' | 'browser' | 'playwright' | 'url'>('file')
   const [isBusy, setIsBusy] = useState(false)
@@ -1110,6 +1115,14 @@ export function CaptureView({
           </CardContent>
         </Card>
       )}
+
+      {/* PLANILLA INTERACTIVA TIPO EXCEL DE 2 PESTAÑAS (REPOSITORIOS + SKILLS DENTRO DE LOS REPOSITORIOS) DEBAJO DE CAPTURA */}
+      <ReposSkillsExcelTable
+        bookmarks={bookmarks}
+        onSelectRepoDetail={onOpenRepoDetail}
+        title="Tabla Interactiva de Repositorios y Skills (2 Pestañas tipo Excel)"
+        subtitle="Consultá acá mismo toda la información de tus Repositorios (Pestaña 1) y los Skills que hay adentro de cada uno (Pestaña 2: qué hace, link al repo, estrellas, comentarios, si se recomienda, empresa y para qué proyecto sirve) sin tener que exportarlos."
+      />
 
       {/* Historial real de importaciones (SQLite) */}
       <Card className="border-border/80 bg-card/70">

@@ -16,6 +16,7 @@ import { TopicsView } from '@/components/views/topics-view'
 import { SourcesView } from '@/components/views/sources-view'
 import { ExportView } from '@/components/views/export-view'
 import { CaptureView } from '@/components/views/capture-view'
+import { ReposSkillsExcelTable } from '@/components/repos-skills-excel-table'
 import { BookmarkItem, ImportHistoryEntry, StorageDiagnostics } from '@/lib/types'
 
 export default function AtlasApp() {
@@ -314,7 +315,7 @@ export default function AtlasApp() {
           {/* Menú desplegable Mobile */}
           {mobileMenuOpen && (
             <div className="mb-6 flex flex-col gap-1 rounded-lg border border-border bg-[#16181f] p-3 lg:hidden">
-              {['Resumen', 'Biblioteca', 'Repositorios', 'Temas', 'Fuentes', 'Exportar', 'Captura'].map(name => (
+              {['Resumen', 'Biblioteca', 'Repositorios', 'Temas', 'Fuentes', 'Exportar', 'Captura', 'TablaReposSkills'].map(name => (
                 <button
                   key={name}
                   onClick={() => {
@@ -325,7 +326,7 @@ export default function AtlasApp() {
                     active === name ? 'bg-[#28263b] text-[#bfb8ff]' : 'text-muted-foreground'
                   }`}
                 >
-                  {name}
+                  {name === 'TablaReposSkills' ? 'Tabla Repos & Skills' : name}
                 </button>
               ))}
             </div>
@@ -484,6 +485,17 @@ export default function AtlasApp() {
               onNavigateLibrary={() => setActive('Biblioteca')}
               totalCount={bookmarks.length}
               history={importHistory}
+              bookmarks={bookmarks}
+              onOpenRepoDetail={handleOpenRepoInGallery}
+            />
+          )}
+
+          {active === 'TablaReposSkills' && (
+            <ReposSkillsExcelTable
+              bookmarks={bookmarks}
+              onSelectRepoDetail={handleOpenRepoInGallery}
+              title="Tabla Maestra de Repositorios y Skills (2 Pestañas tipo Excel)"
+              subtitle="Pestaña 1: Toda la información de tus Repositorios · Pestaña 2: Todos los Skills dentro de los repositorios (qué hace, link al repo, estrellas, comentarios editables, si lo recomendás, empresa creadora y para qué proyecto sirve)."
             />
           )}
         </div>

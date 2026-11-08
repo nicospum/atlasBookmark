@@ -724,10 +724,11 @@ test('Agent Classifier, Master Excel Workbook & Super-Importer with Deduplicatio
   assert.ok(evaluation.atlasScore >= 8.5)
   assert.ok(evaluation.projectUseCases.length > 20)
 
-  // 4. Master Repositories Excel Workbook (5 sheets & 21 columns)
+  // 4. Master Repositories Excel Workbook (6 sheets including 'Skills en Repositorios' & 21 columns)
   const wb = buildRepositoriesWorkbook(allRepos, getAllBookmarks())
   assert.deepEqual(wb.SheetNames, [
     'Catálogo Maestro',
+    'Skills en Repositorios',
     'Skills, MCPs y Agentes',
     'Por Área y Proyecto',
     'Top Puntaje y Seguridad',
@@ -738,6 +739,18 @@ test('Agent Classifier, Master Excel Workbook & Super-Importer with Deduplicatio
   for (const col of REPO_MASTER_EXCEL_COLUMNS) {
     assert.ok(col in masterRows[0], `Missing column in Master Excel: ${col}`)
   }
+
+  // 5. Verify individual skills extraction from inside a multi-skill repository README
+  const { extractSkillsFromRepository } = require('../lib/repo-skills-extractor.ts')
+  const sampleSkills = extractSkillsFromRepository({
+    ...anthropicRepo,
+    stars: 188000,
+    readme: '# Skills\n| Skill | Description |\n|---|---|\n| [docx](skills/docx/SKILL.md) | Create Word docs |\n| [xlsx](skills/xlsx/SKILL.md) | Build Excel sheets |'
+  })
+  assert.equal(sampleSkills.length, 2)
+  assert.equal(sampleSkills[0].skillName, 'docx')
+  assert.equal(sampleSkills[0].companyOrAuthor, 'Anthropic (Oficial)')
+  assert.equal(sampleSkills[0].recommended, 'Sí — Altamente recomendado')
 })
 
 test('10-Point Suite: WhatsApp Consecutive Note Fusion (#4), Cloud Sync Bundle (#5), Security Inspector (#6), Stack Recommender (#8) & Release Radar (#10)', async () => {

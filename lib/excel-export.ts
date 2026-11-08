@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
 import { BookmarkItem, GalleryRepository } from './types'
 import { evaluateAndClassifyRepository, extractInstallAndSetupSnippets } from './github-gallery'
+import { extractAllSkillsFromRepositories, ExtractedRepoSkill } from './repo-skills-extractor'
 
 export interface ExportOptions {
   sheets: string[]
@@ -555,9 +556,80 @@ function attachRepoColumnWidthsAndFilter(ws: XLSX.WorkSheet, rowCount: number) {
   }
 }
 
+export const SKILL_MASTER_EXCEL_COLUMNS = [
+  'Skill',
+  'Tipo de Skill / Capacidad',
+  'Qué hace (Español)',
+  'Qué tipo de cosas puede hacer',
+  'Repositorio al que pertenece',
+  'Link al Repositorio',
+  'Link directo al Skill',
+  'Estrellas del Repo (★)',
+  '¿Lo recomendás?',
+  'Motivo de Recomendación',
+  'Puntaje Atlas (1-10)',
+  'Empresa / Organización que lo desarrolló',
+  'Tipo de Creador',
+  'Área / Categoría',
+  'Para qué Proyecto podría servir',
+  'Grado de Seguridad',
+  'Comando de Instalación',
+  'Comentarios / Notas'
+]
+
+export function mapSkillToExcelRow(skill: ExtractedRepoSkill): Record<string, string | number> {
+  return {
+    Skill: sanitizeFormulaCell(skill.skillName),
+    'Tipo de Skill / Capacidad': sanitizeFormulaCell(skill.skillKind),
+    'Qué hace (Español)': sanitizeFormulaCell(skill.whatItDoesEs),
+    'Qué tipo de cosas puede hacer': sanitizeFormulaCell(skill.capabilitiesEs),
+    'Repositorio al que pertenece': sanitizeFormulaCell(skill.repoFullName),
+    'Link al Repositorio': skill.repoUrl,
+    'Link directo al Skill': skill.skillUrl,
+    'Estrellas del Repo (★)': Number(skill.stars) || 0,
+    '¿Lo recomendás?': sanitizeFormulaCell(skill.recommended),
+    'Motivo de Recomendación': sanitizeFormulaCell(skill.recommendationReason),
+    'Puntaje Atlas (1-10)': skill.atlasScore,
+    'Empresa / Organización que lo desarrolló': sanitizeFormulaCell(skill.companyOrAuthor),
+    'Tipo de Creador': sanitizeFormulaCell(skill.creatorKind),
+    'Área / Categoría': sanitizeFormulaCell(skill.areaCategory),
+    'Para qué Proyecto podría servir': sanitizeFormulaCell(skill.projectUseCases),
+    'Grado de Seguridad': sanitizeFormulaCell(skill.securityGrade),
+    'Comando de Instalación': sanitizeFormulaCell(skill.installCommand),
+    'Comentarios / Notas': sanitizeFormulaCell(skill.comments || '')
+  }
+}
+
+function attachSkillColumnWidthsAndFilter(ws: XLSX.WorkSheet, rowCount: number) {
+  ws['!cols'] = [
+    { wch: 28 }, // Skill
+    { wch: 26 }, // Tipo de Skill
+    { wch: 54 }, // Qué hace
+    { wch: 46 }, // Qué tipo de cosas puede hacer
+    { wch: 30 }, // Repositorio
+    { wch: 40 }, // Link al Repo
+    { wch: 44 }, // Link directo al Skill
+    { wch: 16 }, // Estrellas
+    { wch: 28 }, // ¿Lo recomendás?
+    { wch: 46 }, // Motivo
+    { wch: 16 }, // Puntaje
+    { wch: 32 }, // Empresa
+    { wch: 26 }, // Tipo de Creador
+    { wch: 32 }, // Área
+    { wch: 48 }, // Para qué Proyecto podría servir
+    { wch: 18 }, // Seguridad
+    { wch: 42 }, // Comando
+    { wch: 48 }  // Comentarios
+  ]
+  if (rowCount > 0 && ws['!ref']) {
+    ws['!autofilter'] = { ref: ws['!ref'] }
+  }
+}
+
 export function buildRepositoriesWorkbook(
   repos: GalleryRepository[],
-  bookmarks: BookmarkItem[] = []
+  bookmarks: BookmarkItem[] = [],
+  preExtractedSkills?: ExtractedRepoSkill[]
 ): XLSX.WorkBook {
   const wb = XLSX.utils.book_new()
 
@@ -573,11 +645,18 @@ export function buildRepositoriesWorkbook(
     return (b.stars || 0) - (a.stars || 0)
   })
 
-  // 1. Sheet: Catálogo Maestro
+  // 1. Sheet: Repositorios (Catálogo Maestro)
   const masterRows = sortedMaster.map(r => mapRepoToMasterExcelRow(r, bookmarks))
   const wsMaster = XLSX.utils.json_to_sheet(masterRows, { header: REPO_MASTER_EXCEL_COLUMNS })
   attachRepoColumnWidthsAndFilter(wsMaster, masterRows.length)
   XLSX.utils.book_append_sheet(wb, wsMaster, 'Catálogo Maestro')
+
+  // 2. Sheet: Skills en Repositorios (Desglose individual de cada Skill adentro de los repos)
+  const allSkills = preExtractedSkills || extractAllSkillsFromRepositories(sortedMaster, bookmarks)
+  const skillRows = allSkills.map(s => mapSkillToExcelRow(s))
+  const wsSkills = XLSX.utils.json_to_sheet(skillRows, { header: SKILL_MASTER_EXCEL_COLUMNS })
+  attachSkillColumnWidthsAndFilter(wsSkills, skillRows.length)
+  XLSX.utils.book_append_sheet(wb, wsSkills, 'Skills en Repositorios')
 
   // 2. Sheet: Skills, MCPs y Agentes
   const agenticRepos = sortedMaster.filter(
@@ -673,9 +752,10 @@ export function buildRepositoriesWorkbook(
 export function generateRepositoriesExcelFile(
   repos: GalleryRepository[],
   bookmarks: BookmarkItem[] = [],
-  filename?: string
+  filename?: string,
+  preExtractedSkills?: ExtractedRepoSkill[]
 ): string {
-  const wb = buildRepositoriesWorkbook(repos, bookmarks)
+  const wb = buildRepositoriesWorkbook(repos, bookmarks, preExtractedSkills)
   const finalName =
     filename || `atlas-catalogo-repositorios-ia-${new Date().toISOString().slice(0, 10)}.xlsx`
   XLSX.writeFile(wb, finalName)

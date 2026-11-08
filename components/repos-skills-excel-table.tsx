@@ -1,0 +1,1214 @@
+'use client'
+
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import {
+  Table2,
+  FolderGit2,
+  Puzzle,
+  Star,
+  GitFork,
+  ExternalLink,
+  Search,
+  Download,
+  Check,
+  Copy,
+  Sparkles,
+  ShieldCheck,
+  Building2,
+  MessageSquarePlus,
+  Filter,
+  ArrowUpDown,
+  RefreshCw,
+  X,
+  ThumbsUp,
+  AlertTriangle,
+  ThumbsDown
+} from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { BookmarkItem, GalleryRepository } from '@/lib/types'
+import { evaluateAndClassifyRepository, extractInstallAndSetupSnippets } from '@/lib/github-gallery'
+import {
+  ExtractedRepoSkill,
+  SkillRecommendationVerdict,
+  extractAllSkillsFromRepositories
+} from '@/lib/repo-skills-extractor'
+import { generateRepositoriesExcelFile } from '@/lib/excel-export'
+
+interface ReposSkillsExcelTableProps {
+  bookmarks?: BookmarkItem[]
+  initialRepos?: GalleryRepository[]
+  initialSkills?: ExtractedRepoSkill[]
+  onSelectRepoDetail?: (fullName: string) => void
+  title?: string
+  subtitle?: string
+  defaultSheet?: 'repos' | 'skills'
+}
+
+export function ReposSkillsExcelTable({
+  bookmarks = [],
+  initialRepos,
+  initialSkills,
+  onSelectRepoDetail,
+  title = 'Planilla Maestra Interactiva (Tipo Excel — 2 Pestañas)',
+  subtitle = 'Consultá, filtrá y editá comentarios de todos tus Repositorios y de los Skills individuales que hay adentro de cada uno sin necesidad de exportar.',
+  defaultSheet = 'repos'
+}: ReposSkillsExcelTableProps) {
+  const [activeSheet, setActiveSheet] = useState<'repos' | 'skills'>(defaultSheet)
+  const [repos, setRepos] = useState<GalleryRepository[]>(initialRepos || [])
+  const [skills, setSkills] = useState<ExtractedRepoSkill[]>(initialSkills || [])
+  const [isLoading, setIsLoading] = useState(!initialRepos || initialRepos.length === 0)
+
+  // Shared & Tab-specific filters
+  const [searchQuery, setSearchQuery] = useState('')
+  const [areaFilter, setAreaFilter] = useState<string>('all')
+  const [recFilter, setRecFilter] = useState<string>('all')
+  const [skillKindFilter, setSkillKindFilter] = useState<string>('all')
+  const [repoFilterForSkills, setRepoFilterForSkills] = useState<string>('all')
+  const [onlySubSkills, setOnlySubSkills] = useState<boolean>(false)
+  const [sortBy, setSortBy] = useState<'score' | 'stars' | 'name' | 'company'>('score')
+  const [pageSize, setPageSize] = useState<number>(50)
+  const [currentPage, setCurrentPage] = useState<number>(1)
+
+  // Inline editing states
+  const [editingSkillId, setEditingSkillId] = useState<string | null>(null)
+  const [editingSkillComment, setEditingSkillComment] = useState<string>('')
+  const [editingRepoName, setEditingRepoName] = useState<string | null>(null)
+  const [editingRepoNote, setEditingRepoNote] = useState<string>('')
+  const [savingId, setSavingId] = useState<string | null>(null)
+  const [copiedCmdId, setCopiedCmdId] = useState<string | null>(null)
+
+  const fetchReposAndSkills = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const res = await fetch('/api/github/repos')
+      const data = await res.json().catch(() => null)
+      if (res.ok && data?.success) {
+        const loadedRepos: GalleryRepository[] = data.repositories || []
+        setRepos(loadedRepos)
+        if (Array.isArray(data.skills) && data.skills.length > 0) {
+          setSkills(data.skills)
+        } else {
+          setSkills(extractAllSkillsFromRepositories(loadedRepos, bookmarks))
+        }
+      }
+    } catch (err) {
+      console.error('Error cargando tabla de repositorios y skills:', err)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [bookmarks])
+
+  useEffect(() => {
+    if (initialRepos && initialRepos.length > 0) {
+      setRepos(initialRepos)
+      if (initialSkills && initialSkills.length > 0) {
+        setSkills(initialSkills)
+      } else {
+        setSkills(extractAllSkillsFromRepositories(initialRepos, bookmarks))
+      }
+      setIsLoading(false)
+    } else {
+      fetchReposAndSkills()
+    }
+  }, [initialRepos, initialSkills, bookmarks, fetchReposAndSkills])
+
+  // Reset pagination when filters or sheet change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [activeSheet, searchQuery, areaFilter, recFilter, skillKindFilter, repoFilterForSkills, onlySubSkills, sortBy])
+
+  // Map repo fullName -> number of extracted skills inside it
+  const skillsCountByRepo = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const s of skills) {
+      const key = s.repoFullName.toLowerCase()
+      map.set(key, (map.get(key) || 0) + 1)
+    }
+    return map
+  }, [skills])
+
+  // Enriched repos with evaluation
+  const enrichedRepos = useMemo(() => {
+    return repos.map(r => {
+      const ev = r.agentEvaluation || evaluateAndClassifyRepository(r, bookmarks)
+      const install = extractInstallAndSetupSnippets(r)
+      const recommended: SkillRecommendationVerdict =
+        ev.securityGrade === 'Precaución' && ev.atlasScore < 6.5
+          ? 'Con reservas — Revisar'
+          : ev.atlasScore >= 8.4 || ((r.stars || 0) >= 5000 && ev.securityGrade === 'Alto')
+          ? 'Sí — Altamente recomendado'
+          : ev.atlasScore >= 6.8
+          ? 'Sí — Recomendado'
+          : 'Con reservas — Revisar'
+
+      const linkedBms = bookmarks.filter(bm => {
+        if ((r.linkedBookmarkIds || []).includes(bm.id)) return true
+        return (bm.resources || []).some(
+          res => (res.fullName || '').toLowerCase() === (r.fullName || '').toLowerCase()
+        )
+      })
+      const contextNotes = linkedBms
+        .filter(b => b.platform !== 'github')
+        .map(b => `${b.authorHandle || b.authorName} (${b.platform.toUpperCase()}): ${(b.caption || '').replace(/\s+/g, ' ').slice(0, 100)}`)
+        .slice(0, 2)
+        .join(' | ')
+
+      return {
+        repo: r,
+        ev,
+        installCommand: install.primaryCommand,
+        recommended,
+        contextNotes,
+        skillsCount: skillsCountByRepo.get(r.fullName.toLowerCase()) || 0
+      }
+    })
+  }, [repos, bookmarks, skillsCountByRepo])
+
+  // Available areas for filter dropdown
+  const availableAreas = useMemo(() => {
+    const set = new Set<string>()
+    for (const item of enrichedRepos) {
+      if (item.ev.areaCategory) set.add(item.ev.areaCategory)
+    }
+    return Array.from(set).sort()
+  }, [enrichedRepos])
+
+  // Filtered & sorted Repos
+  const filteredRepos = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    return enrichedRepos
+      .filter(item => {
+        if (areaFilter !== 'all' && item.ev.areaCategory !== areaFilter) return false
+        if (recFilter === 'recommended' && !item.recommended.startsWith('Sí')) return false
+        if (recFilter === 'highly' && item.recommended !== 'Sí — Altamente recomendado') return false
+        if (recFilter === 'caution' && item.recommended.startsWith('Sí')) return false
+        if (!q) return true
+        const hay = [
+          item.repo.fullName,
+          item.ev.whatIsItEs,
+          item.ev.areaCategory,
+          item.repo.resourceType || '',
+          item.ev.companyOrAuthor,
+          item.ev.projectUseCases,
+          item.repo.notes || '',
+          item.contextNotes,
+          item.repo.primaryLanguage || ''
+        ]
+          .join(' ')
+          .toLowerCase()
+        return hay.includes(q)
+      })
+      .sort((a, b) => {
+        if (sortBy === 'stars') return (b.repo.stars || 0) - (a.repo.stars || 0)
+        if (sortBy === 'name') return a.repo.fullName.localeCompare(b.repo.fullName)
+        if (sortBy === 'company') return a.ev.companyOrAuthor.localeCompare(b.ev.companyOrAuthor)
+        if (b.ev.atlasScore !== a.ev.atlasScore) return b.ev.atlasScore - a.ev.atlasScore
+        return (b.repo.stars || 0) - (a.repo.stars || 0)
+      })
+  }, [enrichedRepos, searchQuery, areaFilter, recFilter, sortBy])
+
+  // Filtered & sorted Skills
+  const filteredSkills = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    return skills
+      .filter(s => {
+        if (areaFilter !== 'all' && s.areaCategory !== areaFilter) return false
+        if (skillKindFilter !== 'all' && s.skillKind !== skillKindFilter) return false
+        if (
+          repoFilterForSkills !== 'all' &&
+          s.repoFullName.toLowerCase() !== repoFilterForSkills.toLowerCase()
+        ) {
+          return false
+        }
+        if (onlySubSkills && !s.isSubSkillFromReadme) return false
+        if (recFilter === 'recommended' && !s.recommended.startsWith('Sí')) return false
+        if (recFilter === 'highly' && s.recommended !== 'Sí — Altamente recomendado') return false
+        if (recFilter === 'caution' && s.recommended.startsWith('Sí')) return false
+        if (!q) return true
+        const hay = [
+          s.skillName,
+          s.whatItDoesEs,
+          s.capabilitiesEs,
+          s.repoFullName,
+          s.companyOrAuthor,
+          s.projectUseCases,
+          s.comments || '',
+          s.areaCategory,
+          s.skillKind
+        ]
+          .join(' ')
+          .toLowerCase()
+        return hay.includes(q)
+      })
+      .sort((a, b) => {
+        if (sortBy === 'stars') return (b.stars || 0) - (a.stars || 0)
+        if (sortBy === 'name') return a.skillName.localeCompare(b.skillName)
+        if (sortBy === 'company') return a.companyOrAuthor.localeCompare(b.companyOrAuthor)
+        if (b.atlasScore !== a.atlasScore) return b.atlasScore - a.atlasScore
+        return (b.stars || 0) - (a.stars || 0)
+      })
+  }, [skills, searchQuery, areaFilter, skillKindFilter, repoFilterForSkills, onlySubSkills, recFilter, sortBy])
+
+  const activeTotalCount = activeSheet === 'repos' ? filteredRepos.length : filteredSkills.length
+  const totalPages = pageSize === 0 ? 1 : Math.max(1, Math.ceil(activeTotalCount / pageSize))
+  const visibleRepos = useMemo(() => {
+    if (pageSize === 0) return filteredRepos
+    const start = (currentPage - 1) * pageSize
+    return filteredRepos.slice(start, start + pageSize)
+  }, [filteredRepos, currentPage, pageSize])
+
+  const visibleSkills = useMemo(() => {
+    if (pageSize === 0) return filteredSkills
+    const start = (currentPage - 1) * pageSize
+    return filteredSkills.slice(start, start + pageSize)
+  }, [filteredSkills, currentPage, pageSize])
+
+  const handleSaveSkillNote = async (
+    skillId: string,
+    updates: { comments?: string; recommended?: SkillRecommendationVerdict }
+  ) => {
+    setSavingId(skillId)
+    setSkills(prev =>
+      prev.map(s => (s.id === skillId ? { ...s, ...updates } : s))
+    )
+    try {
+      await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'saveSkillNote',
+          skillId,
+          ...updates
+        })
+      })
+    } catch (err) {
+      console.error('Error guardando nota de skill:', err)
+    } finally {
+      setSavingId(null)
+      setEditingSkillId(null)
+    }
+  }
+
+  const handleSaveRepoNote = async (fullName: string, notes: string) => {
+    setSavingId(fullName)
+    setRepos(prev =>
+      prev.map(r => (r.fullName === fullName ? { ...r, notes } : r))
+    )
+    try {
+      await fetch('/api/github/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'update-repo',
+          fullName,
+          notes
+        })
+      })
+    } catch (err) {
+      console.error('Error guardando nota de repositorio:', err)
+    } finally {
+      setSavingId(null)
+      setEditingRepoName(null)
+    }
+  }
+
+  const handleCopyCommand = (id: string, cmd: string) => {
+    navigator.clipboard.writeText(cmd)
+    setCopiedCmdId(id)
+    setTimeout(() => setCopiedCmdId(null), 1800)
+  }
+
+  const handleJumpToRepoSkills = (repoFullName: string) => {
+    setRepoFilterForSkills(repoFullName)
+    setActiveSheet('skills')
+  }
+
+  const renderRecommendationBadge = (rec: SkillRecommendationVerdict) => {
+    if (rec === 'Sí — Altamente recomendado') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+          <ThumbsUp className="size-3" /> Sí · Altamente recomendado
+        </span>
+      )
+    }
+    if (rec === 'Sí — Recomendado') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-md border border-sky-500/40 bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-300">
+          <Check className="size-3" /> Sí · Recomendado
+        </span>
+      )
+    }
+    if (rec === 'No recomendado') {
+      return (
+        <span className="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-[11px] font-medium text-rose-300">
+          <ThumbsDown className="size-3" /> No recomendado
+        </span>
+      )
+    }
+    return (
+      <span className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-300">
+        <AlertTriangle className="size-3" /> Con reservas · Revisar
+      </span>
+    )
+  }
+
+  return (
+    <div className="flex flex-col rounded-xl border border-[#2d3042] bg-[#12141d] shadow-xl overflow-hidden">
+      {/* EXCEL TOP HEADER & SHEET SELECTOR */}
+      <div className="flex flex-col gap-4 border-b border-[#252838] bg-[#161924] p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400">
+              <Table2 className="size-5" />
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base sm:text-lg font-semibold text-foreground">{title}</h2>
+                <Badge className="border-0 bg-emerald-500/20 text-emerald-300 text-[11px]">
+                  En vivo · Sin necesidad de exportar
+                </Badge>
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={fetchReposAndSkills}
+              disabled={isLoading}
+              className="border-border bg-[#12141d] text-xs"
+            >
+              <RefreshCw className={`mr-1.5 size-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              Actualizar tabla
+            </Button>
+            <Button
+              size="sm"
+              onClick={() =>
+                generateRepositoriesExcelFile(
+                  repos,
+                  bookmarks,
+                  `atlas-repositorios-y-skills-${new Date().toISOString().slice(0, 10)}.xlsx`,
+                  skills
+                )
+              }
+              className="bg-emerald-600 text-xs text-white hover:bg-emerald-500"
+            >
+              <Download className="mr-1.5 size-3.5" />
+              Descargar este Excel (.xlsx)
+            </Button>
+          </div>
+        </div>
+
+        {/* EXCEL SHEET TABS (TOP) */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+          <div className="inline-flex rounded-lg border border-[#2e3247] bg-[#0f1118] p-1">
+            <button
+              type="button"
+              onClick={() => setActiveSheet('repos')}
+              className={`flex items-center gap-2 rounded-md px-4 py-2 text-xs font-semibold transition-all ${
+                activeSheet === 'repos'
+                  ? 'bg-[#7c6cf0] text-white shadow-sm'
+                  : 'text-muted-foreground hover:bg-[#1a1d29] hover:text-foreground'
+              }`}
+            >
+              <FolderGit2 className="size-4" />
+              <span>Pestaña 1: Repositorios</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] ${
+                  activeSheet === 'repos'
+                    ? 'bg-black/25 text-white'
+                    : 'bg-[#1e2130] text-muted-foreground'
+                }`}
+              >
+                {filteredRepos.length} / {repos.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSheet('skills')}
+              className={`flex items-center gap-2 rounded-md px-4 py-2 text-xs font-semibold transition-all ${
+                activeSheet === 'skills'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-muted-foreground hover:bg-[#1a1d29] hover:text-foreground'
+              }`}
+            >
+              <Puzzle className="size-4" />
+              <span>Pestaña 2: Skills dentro de los Repositorios</span>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] ${
+                  activeSheet === 'skills'
+                    ? 'bg-black/25 text-white'
+                    : 'bg-[#1e2130] text-muted-foreground'
+                }`}
+              >
+                {filteredSkills.length} / {skills.length}
+              </span>
+            </button>
+          </div>
+
+          {activeSheet === 'skills' && repoFilterForSkills !== 'all' && (
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-200">
+              <span>
+                Viendo skills dentro de: <strong className="font-mono">{repoFilterForSkills}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={() => setRepoFilterForSkills('all')}
+                className="rounded p-0.5 hover:bg-emerald-500/20"
+                title="Ver skills de todos los repositorios"
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* FILTER & SEARCH BAR */}
+        <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="relative lg:col-span-2">
+            <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder={
+                activeSheet === 'repos'
+                  ? 'Buscar repositorio, qué hace, empresa, proyecto, lenguaje o nota...'
+                  : 'Buscar skill (/grill-me, docx, prisma-cli...), qué hace, empresa, repositorio o proyecto...'
+              }
+              className="h-9 w-full rounded-md border border-[#2b2e40] bg-[#0f1118] pl-9 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus:border-[#7c6cf0] focus:outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="size-3.5" />
+              </button>
+            )}
+          </div>
+
+          <select
+            value={areaFilter}
+            onChange={e => setAreaFilter(e.target.value)}
+            className="h-9 rounded-md border border-[#2b2e40] bg-[#0f1118] px-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+          >
+            <option value="all">Todas las Áreas ({availableAreas.length})</option>
+            {availableAreas.map(area => (
+              <option key={area} value={area}>
+                {area}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={recFilter}
+            onChange={e => setRecFilter(e.target.value)}
+            className="h-9 rounded-md border border-[#2b2e40] bg-[#0f1118] px-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+          >
+            <option value="all">¿Lo recomendás?: Todos</option>
+            <option value="highly">🌟 Sí — Altamente recomendados</option>
+            <option value="recommended">✅ Todos los Recomendados (Sí)</option>
+            <option value="caution">⚠️ Con reservas / No recomendados</option>
+          </select>
+
+          <div className="flex items-center gap-2">
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value as any)}
+              className="h-9 flex-1 rounded-md border border-[#2b2e40] bg-[#0f1118] px-2.5 text-xs text-foreground focus:border-[#7c6cf0] focus:outline-none"
+            >
+              <option value="score">Ordenar: ★ Puntaje Atlas (1-10)</option>
+              <option value="stars">Ordenar: Estrellas GitHub (★)</option>
+              <option value="company">Ordenar: Empresa / Autor</option>
+              <option value="name">Ordenar: Alfabético (A-Z)</option>
+            </select>
+          </div>
+        </div>
+
+        {/* EXTRA FILTERS FOR SKILLS SHEET */}
+        {activeSheet === 'skills' && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#232636] pt-2.5 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-muted-foreground flex items-center gap-1">
+                <Filter className="size-3.5 text-emerald-400" /> Tipo de Skill:
+              </span>
+              {[
+                { id: 'all', label: 'Todos' },
+                { id: 'Skill (SKILL.md)', label: 'Skill (SKILL.md)' },
+                { id: 'Comando Slash (/cmd)', label: 'Comandos Slash (/cmd)' },
+                { id: 'Subagente Especializado', label: 'Subagentes' },
+                { id: 'Servidor / Conector MCP', label: 'Servidores MCP' }
+              ].map(t => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setSkillKindFilter(t.id)}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    skillKindFilter === t.id
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-[#11131c] text-muted-foreground hover:text-foreground border border-transparent'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-emerald-300">
+              <input
+                type="checkbox"
+                checked={onlySubSkills}
+                onChange={e => setOnlySubSkills(e.target.checked)}
+                className="accent-emerald-500"
+              />
+              <span>Solo sub-skills desglosados del interior de packs (ej. anthropics/skills, getsentry/skills)</span>
+            </label>
+          </div>
+        )}
+      </div>
+
+      {/* EXCEL GRID BODY */}
+      <div className="relative max-h-[680px] overflow-auto bg-[#0d0f16]">
+        {isLoading ? (
+          <div className="flex h-64 items-center justify-center gap-2 text-xs text-muted-foreground">
+            <RefreshCw className="size-4 animate-spin text-[#7c6cf0]" />
+            <span>Cargando planilla de Repositorios y Skills...</span>
+          </div>
+        ) : activeSheet === 'repos' ? (
+          /* ================= PESTAÑA 1: REPOSITORIOS ================= */
+          <table className="w-full border-collapse text-left text-xs">
+            <thead className="sticky top-0 z-10 bg-[#181b28] text-[11px] font-semibold uppercase tracking-wider text-[#b5bdd6] shadow-sm">
+              <tr className="border-b border-[#2b2f42]">
+                <th className="border-r border-[#252838] px-3 py-2.5 text-center w-10">#</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[210px]">Repositorio</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[290px]">Qué es y para qué sirve</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[130px] text-center">Skills adentro</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[130px]">Estrellas / Forks</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[200px]">¿Lo recomendás? / Puntaje</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[190px]">Empresa / Desarrollador</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[190px]">Área & Tipo</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[260px]">Para qué proyecto podría servir</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[150px]">Seguridad & Licencia</th>
+                <th className="border-r border-[#252838] px-3 py-2.5 min-w-[250px]">Comentarios / Notas (Editable)</th>
+                <th className="px-3 py-2.5 min-w-[180px]">Instalación / Link</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1e2130]">
+              {visibleRepos.length === 0 ? (
+                <tr>
+                  <td colSpan={12} className="py-12 text-center text-xs text-muted-foreground">
+                    No se encontraron repositorios con los filtros seleccionados.
+                  </td>
+                </tr>
+              ) : (
+                visibleRepos.map((item, idx) => {
+                  const rowNum = (currentPage - 1) * (pageSize || filteredRepos.length) + idx + 1
+                  const { repo, ev, installCommand, recommended, contextNotes, skillsCount } = item
+                  const isEditingThisRepo = editingRepoName === repo.fullName
+
+                  return (
+                    <tr
+                      key={repo.fullName}
+                      className="group transition-colors hover:bg-[#161926] odd:bg-[#0f1119] even:bg-[#121520]"
+                    >
+                      <td className="border-r border-[#1e2130] px-2.5 py-3 text-center font-mono text-[11px] text-muted-foreground">
+                        {rowNum}
+                      </td>
+
+                      {/* Repositorio */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex items-start gap-2.5">
+                          <img
+                            src={repo.avatarUrl || `https://github.com/${repo.owner}.png?size=64`}
+                            alt={repo.owner}
+                            className="mt-0.5 size-6 rounded-md border border-border object-cover shrink-0"
+                            loading="lazy"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              {onSelectRepoDetail ? (
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectRepoDetail(repo.fullName)}
+                                  className="font-semibold text-[#bfb8ff] hover:underline text-left break-all"
+                                >
+                                  {repo.fullName}
+                                </button>
+                              ) : (
+                                <a
+                                  href={repo.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="font-semibold text-[#bfb8ff] hover:underline break-all"
+                                >
+                                  {repo.fullName}
+                                </a>
+                              )}
+                              <a
+                                href={repo.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                title="Abrir en GitHub"
+                                className="text-muted-foreground hover:text-foreground shrink-0"
+                              >
+                                <ExternalLink className="size-3" />
+                              </a>
+                            </div>
+                            {repo.primaryLanguage && (
+                              <span className="mt-1 inline-block rounded bg-[#1d2030] px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                {repo.primaryLanguage}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Qué es y para qué sirve */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-[#e2e4f0]">
+                        {ev.whatIsItEs}
+                      </td>
+
+                      {/* Skills adentro */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top text-center">
+                        {skillsCount > 0 ? (
+                          <button
+                            type="button"
+                            onClick={() => handleJumpToRepoSkills(repo.fullName)}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/25 transition-colors"
+                            title="Ver los skills de este repositorio en la Pestaña 2"
+                          >
+                            <Puzzle className="size-3" />
+                            <span>{skillsCount} skill{skillsCount === 1 ? '' : 's'}</span>
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-muted-foreground">—</span>
+                        )}
+                      </td>
+
+                      {/* Estrellas / Forks */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top font-mono">
+                        <div className="flex items-center gap-1 font-semibold text-amber-300">
+                          <Star className="size-3.5 fill-amber-400 text-amber-400" />
+                          <span>{(repo.stars || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground">
+                          <GitFork className="size-3" />
+                          <span>{(repo.forks || 0).toLocaleString()} forks</span>
+                        </div>
+                      </td>
+
+                      {/* Recomendación / Puntaje */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1.5">
+                          {renderRecommendationBadge(recommended)}
+                          <div className="flex items-center gap-1.5 text-[11px]">
+                            <span className="rounded bg-[#252238] px-1.5 py-0.5 font-mono font-bold text-[#bfb8ff]">
+                              {ev.atlasScore}/10
+                            </span>
+                            <span className="text-muted-foreground truncate" title={ev.atlasScoreLabel}>
+                              {ev.atlasScoreLabel}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Empresa / Autor */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="font-medium text-foreground flex items-center gap-1.5">
+                          <Building2 className="size-3.5 text-[#8e83f2] shrink-0" />
+                          <span>{ev.companyOrAuthor}</span>
+                        </div>
+                        <span className="mt-1 inline-block text-[11px] text-muted-foreground">
+                          {ev.creatorKind}
+                        </span>
+                      </td>
+
+                      {/* Área & Tipo */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="font-medium text-[#91d0b4]">{ev.areaCategory}</div>
+                        <Badge
+                          variant="outline"
+                          className="mt-1 border-[#32364a] bg-[#171a26] text-[10px] text-muted-foreground"
+                        >
+                          {repo.resourceType || 'Repositorio'}
+                        </Badge>
+                      </td>
+
+                      {/* Para qué proyecto podría servir */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-muted-foreground">
+                        {ev.projectUseCases}
+                      </td>
+
+                      {/* Seguridad & Licencia */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex items-center gap-1">
+                          <ShieldCheck
+                            className={`size-3.5 ${
+                              ev.securityGrade === 'Alto'
+                                ? 'text-emerald-400'
+                                : ev.securityGrade === 'Medio'
+                                ? 'text-sky-400'
+                                : 'text-amber-400'
+                            }`}
+                          />
+                          <span className="font-medium text-foreground">Seguridad: {ev.securityGrade}</span>
+                        </div>
+                        <p className="mt-1 text-[11px] text-muted-foreground line-clamp-2" title={ev.licenseSummary}>
+                          {ev.licenseSummary}
+                        </p>
+                      </td>
+
+                      {/* Comentarios / Notas (Editable) */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        {isEditingThisRepo ? (
+                          <div className="flex flex-col gap-1.5">
+                            <textarea
+                              rows={2}
+                              value={editingRepoNote}
+                              onChange={e => setEditingRepoNote(e.target.value)}
+                              placeholder="Escribí tu comentario o evaluación de este repositorio..."
+                              className="w-full rounded border border-[#7c6cf0] bg-[#0b0d13] p-1.5 text-xs text-foreground focus:outline-none"
+                            />
+                            <div className="flex items-center gap-1.5">
+                              <Button
+                                size="xs"
+                                onClick={() => handleSaveRepoNote(repo.fullName, editingRepoNote)}
+                                disabled={savingId === repo.fullName}
+                                className="bg-[#7c6cf0] text-[11px] text-white hover:bg-[#6f60dc]"
+                              >
+                                Guardar
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => setEditingRepoName(null)}
+                                className="text-[11px]"
+                              >
+                                Cancelar
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => {
+                              setEditingRepoName(repo.fullName)
+                              setEditingRepoNote(repo.notes || '')
+                            }}
+                            className="group/note cursor-pointer rounded border border-transparent p-1.5 hover:border-[#2e3247] hover:bg-[#181b28]"
+                            title="Hacé clic para editar el comentario como en Excel"
+                          >
+                            {repo.notes ? (
+                              <p className="text-foreground">{repo.notes}</p>
+                            ) : (
+                              <p className="text-[11px] italic text-muted-foreground flex items-center gap-1">
+                                <MessageSquarePlus className="size-3 text-[#7c6cf0]" />
+                                Clic para agregar comentario...
+                              </p>
+                            )}
+                            {contextNotes && (
+                              <p className="mt-1 text-[10px] text-muted-foreground line-clamp-2">
+                                {contextNotes}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Instalación / Link */}
+                      <td className="px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
+                            <code className="truncate rounded bg-[#0b0c12] px-1.5 py-0.5 font-mono text-[10px] text-[#a59cf5] max-w-[130px]" title={installCommand}>
+                              {installCommand}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCommand(`repo-${repo.fullName}`, installCommand)}
+                              className="rounded p-1 text-muted-foreground hover:bg-[#232638] hover:text-foreground"
+                              title="Copiar comando"
+                            >
+                              {copiedCmdId === `repo-${repo.fullName}` ? (
+                                <Check className="size-3 text-emerald-400" />
+                              ) : (
+                                <Copy className="size-3" />
+                              )}
+                            </button>
+                          </div>
+                          <a
+                            href={repo.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-[#8e83f2] hover:underline"
+                          >
+                            Abrir GitHub <ExternalLink className="size-2.5" />
+                          </a>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        ) : (
+          /* ================= PESTAÑA 2: SKILLS DENTRO DE LOS REPOSITORIOS ================= */
+          <table className="w-full border-collapse text-left text-xs">
+            <thead className="sticky top-0 z-10 bg-[#142420] text-[11px] font-semibold uppercase tracking-wider text-emerald-200 shadow-sm">
+              <tr className="border-b border-emerald-500/30">
+                <th className="border-r border-[#21332d] px-3 py-2.5 text-center w-10">#</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[200px]">Skill / Comando</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[290px]">Lo que hace (Español)</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[240px]">Qué tipo de cosas puede hacer</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[210px]">Repositorio al que pertenece</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[110px]">Estrellas (★)</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[220px]">¿Lo recomendás? (Sí / No)</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[190px]">Empresa que lo desarrolló</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[260px]">Para qué proyecto podría servir</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[250px]">Comentarios (Editable)</th>
+                <th className="px-3 py-2.5 min-w-[180px]">Instalación rápida</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#1e2130]">
+              {visibleSkills.length === 0 ? (
+                <tr>
+                  <td colSpan={11} className="py-12 text-center text-xs text-muted-foreground">
+                    No se encontraron skills con los filtros seleccionados.
+                  </td>
+                </tr>
+              ) : (
+                visibleSkills.map((skill, idx) => {
+                  const rowNum = (currentPage - 1) * (pageSize || filteredSkills.length) + idx + 1
+                  const isEditingThisSkill = editingSkillId === skill.id
+
+                  return (
+                    <tr
+                      key={skill.id}
+                      className="group transition-colors hover:bg-[#15211f] odd:bg-[#0f1119] even:bg-[#121520]"
+                    >
+                      <td className="border-r border-[#1e2130] px-2.5 py-3 text-center font-mono text-[11px] text-muted-foreground">
+                        {rowNum}
+                      </td>
+
+                      {/* Skill / Comando */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-1.5">
+                            <a
+                              href={skill.skillUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-mono text-xs font-bold text-emerald-300 hover:underline break-all"
+                              title="Abrir definición del Skill en GitHub"
+                            >
+                              {skill.skillName}
+                            </a>
+                            <a
+                              href={skill.skillUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-muted-foreground hover:text-emerald-300 shrink-0"
+                              title="Ver archivo SKILL.md / código del skill"
+                            >
+                              <ExternalLink className="size-3" />
+                            </a>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1">
+                            <span className="rounded bg-[#1a2825] px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
+                              {skill.skillKind}
+                            </span>
+                            {skill.isSubSkillFromReadme && (
+                              <span className="rounded bg-[#242138] px-1.5 py-0.5 text-[10px] text-[#bfb8ff]">
+                                Dentro del repo
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Lo que hace */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-[#e2e4f0]">
+                        {skill.whatItDoesEs}
+                      </td>
+
+                      {/* Qué tipo de cosas puede hacer */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-[#91d0b4]">
+                        {skill.capabilitiesEs}
+                      </td>
+
+                      {/* Repositorio al que pertenece */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1">
+                          <a
+                            href={skill.repoUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 font-semibold text-[#bfb8ff] hover:underline break-all"
+                          >
+                            <FolderGit2 className="size-3.5 shrink-0 text-[#8e83f2]" />
+                            <span>{skill.repoFullName}</span>
+                            <ExternalLink className="size-2.5 shrink-0" />
+                          </a>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setRepoFilterForSkills(
+                                  repoFilterForSkills === skill.repoFullName ? 'all' : skill.repoFullName
+                                )
+                              }
+                              className="text-[10px] text-muted-foreground hover:text-emerald-300 underline"
+                            >
+                              {repoFilterForSkills === skill.repoFullName
+                                ? 'Mostrar todos los repos'
+                                : 'Filtrar skills de este repo'}
+                            </button>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Estrellas */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top font-mono">
+                        <div className="flex items-center gap-1 font-semibold text-amber-300">
+                          <Star className="size-3.5 fill-amber-400 text-amber-400" />
+                          <span>{(skill.stars || 0).toLocaleString()}</span>
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">
+                          Seguridad: {skill.securityGrade}
+                        </span>
+                      </td>
+
+                      {/* ¿Lo recomendás? */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1.5">
+                          <select
+                            value={skill.recommended}
+                            onChange={e =>
+                              handleSaveSkillNote(skill.id, {
+                                recommended: e.target.value as SkillRecommendationVerdict
+                              })
+                            }
+                            className={`rounded border px-2 py-1 text-[11px] font-semibold focus:outline-none ${
+                              skill.recommended === 'Sí — Altamente recomendado'
+                                ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                                : skill.recommended === 'Sí — Recomendado'
+                                ? 'border-sky-500/40 bg-sky-500/15 text-sky-300'
+                                : skill.recommended === 'No recomendado'
+                                ? 'border-rose-500/40 bg-rose-500/15 text-rose-300'
+                                : 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                            }`}
+                          >
+                            <option value="Sí — Altamente recomendado" className="bg-[#12141d] text-emerald-300">
+                              ✅ Sí — Altamente recomendado
+                            </option>
+                            <option value="Sí — Recomendado" className="bg-[#12141d] text-sky-300">
+                              👍 Sí — Recomendado
+                            </option>
+                            <option value="Con reservas — Revisar" className="bg-[#12141d] text-amber-300">
+                              ⚠️ Con reservas — Revisar
+                            </option>
+                            <option value="No recomendado" className="bg-[#12141d] text-rose-300">
+                              ❌ No recomendado
+                            </option>
+                          </select>
+                          <p className="text-[10px] text-muted-foreground leading-snug">
+                            <strong className="text-[#bfb8ff]">{skill.atlasScore}/10</strong> · {skill.recommendationReason}
+                          </p>
+                        </div>
+                      </td>
+
+                      {/* Empresa que lo desarrolló */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="font-medium text-foreground flex items-center gap-1.5">
+                          <Building2 className="size-3.5 text-emerald-400 shrink-0" />
+                          <span>{skill.companyOrAuthor}</span>
+                        </div>
+                        <span className="mt-1 inline-block text-[10px] text-muted-foreground">
+                          {skill.creatorKind}
+                        </span>
+                      </td>
+
+                      {/* Para qué proyecto podría servir */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-muted-foreground">
+                        <span className="mb-1 inline-block rounded bg-[#181b28] px-1.5 py-0.5 text-[10px] font-medium text-[#bfb8ff]">
+                          {skill.areaCategory}
+                        </span>
+                        <p>{skill.projectUseCases}</p>
+                      </td>
+
+                      {/* Comentarios (Editable) */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        {isEditingThisSkill ? (
+                          <div className="flex flex-col gap-1.5">
+                            <textarea
+                              rows={2}
+                              value={editingSkillComment}
+                              onChange={e => setEditingSkillComment(e.target.value)}
+                              placeholder="Agregá tus comentarios sobre este skill..."
+                              className="w-full rounded border border-emerald-500 bg-[#0b0d13] p-1.5 text-xs text-foreground focus:outline-none"
+                            />
+                            <div className="flex items-center gap-1.5">
+                              <Button
+                                size="xs"
+                                onClick={() =>
+                                  handleSaveSkillNote(skill.id, { comments: editingSkillComment })
+                                }
+                                disabled={savingId === skill.id}
+                                className="bg-emerald-600 text-[11px] text-white hover:bg-emerald-500"
+                              >
+                                Guardar
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => setEditingSkillId(null)}
+                                className="text-[11px]"
+                              >
+                                Cancelar
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => {
+                              setEditingSkillId(skill.id)
+                              setEditingSkillComment(skill.comments || '')
+                            }}
+                            className="cursor-pointer rounded border border-transparent p-1.5 hover:border-emerald-500/40 hover:bg-[#15211f]"
+                            title="Hacé clic para agregar o editar tu comentario"
+                          >
+                            {skill.comments ? (
+                              <p className="text-foreground">{skill.comments}</p>
+                            ) : (
+                              <p className="text-[11px] italic text-muted-foreground flex items-center gap-1">
+                                <MessageSquarePlus className="size-3 text-emerald-400" />
+                                Clic para escribir comentario...
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Instalación rápida */}
+                      <td className="px-3 py-3 align-top">
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1">
+                            <code
+                              className="truncate rounded bg-[#0b0c12] px-1.5 py-0.5 font-mono text-[10px] text-emerald-300 max-w-[130px]"
+                              title={skill.installCommand}
+                            >
+                              {skill.installCommand}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCommand(skill.id, skill.installCommand)}
+                              className="rounded p-1 text-muted-foreground hover:bg-[#232638] hover:text-foreground"
+                              title="Copiar comando de instalación"
+                            >
+                              {copiedCmdId === skill.id ? (
+                                <Check className="size-3 text-emerald-400" />
+                              ) : (
+                                <Copy className="size-3" />
+                              )}
+                            </button>
+                          </div>
+                          <a
+                            href={skill.skillUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:underline"
+                          >
+                            Ver Skill <ExternalLink className="size-2.5" />
+                          </a>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* EXCEL BOTTOM BAR (SHEET TABS + PAGINATION LIKE MICROSOFT EXCEL) */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#252838] bg-[#141722] px-4 py-2.5 text-xs">
+        {/* Bottom Sheet Tabs like Excel */}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setActiveSheet('repos')}
+            className={`flex items-center gap-1.5 rounded-t-md border-t-2 px-3 py-1.5 text-xs font-medium transition-colors ${
+              activeSheet === 'repos'
+                ? 'border-[#7c6cf0] bg-[#1d2030] text-[#bfb8ff]'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <FolderGit2 className="size-3.5" />
+            <span>Hoja 1: Repositorios ({filteredRepos.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveSheet('skills')}
+            className={`flex items-center gap-1.5 rounded-t-md border-t-2 px-3 py-1.5 text-xs font-medium transition-colors ${
+              activeSheet === 'skills'
+                ? 'border-emerald-500 bg-[#162823] text-emerald-300'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Puzzle className="size-3.5" />
+            <span>Hoja 2: Skills dentro de los Repos ({filteredSkills.length})</span>
+          </button>
+        </div>
+
+        {/* Pagination Controls */}
+        <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+          <span>
+            Filas por página:
+          </span>
+          <select
+            value={pageSize}
+            onChange={e => setPageSize(Number(e.target.value))}
+            className="rounded border border-[#2b2e40] bg-[#0f1118] px-2 py-1 text-xs text-foreground"
+          >
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={0}>Ver todas ({activeTotalCount})</option>
+          </select>
+
+          {pageSize > 0 && totalPages > 1 && (
+            <div className="flex items-center gap-1.5 ml-2">
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                className="border-[#2b2e40] text-xs"
+              >
+                Anterior
+              </Button>
+              <span className="px-2 font-mono text-[11px] text-foreground">
+                Página {currentPage} de {totalPages}
+              </span>
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={currentPage >= totalPages}
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                className="border-[#2b2e40] text-xs"
+              >
+                Siguiente
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}

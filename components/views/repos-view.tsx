@@ -54,6 +54,7 @@ import {
   generateRepositoriesExcelFile,
   downloadRepositoriesCsvFile
 } from '@/lib/excel-export'
+import { ReposSkillsExcelTable } from '@/components/repos-skills-excel-table'
 import type {
   ActivityFilterType,
   AiProviderId,
@@ -2282,21 +2283,23 @@ export function ReposView({
             <div className="flex items-center rounded-lg border border-border bg-[#15171f] p-0.5">
               <button
                 onClick={() => setViewMode('grid')}
-                className={`rounded-md px-2.5 py-1 text-xs ${
-                  viewMode === 'grid' ? 'bg-[#28263b] text-[#bfb8ff]' : 'text-muted-foreground'
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium ${
+                  viewMode === 'grid' ? 'bg-[#28263b] text-[#bfb8ff]' : 'text-muted-foreground hover:text-foreground'
                 }`}
                 title="Vista de tarjetas visuales"
               >
                 <LayoutGrid className="size-3.5" />
+                <span>Tarjetas</span>
               </button>
               <button
                 onClick={() => setViewMode('table')}
-                className={`rounded-md px-2.5 py-1 text-xs ${
-                  viewMode === 'table' ? 'bg-[#28263b] text-[#bfb8ff]' : 'text-muted-foreground'
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium ${
+                  viewMode === 'table' ? 'bg-emerald-600 text-white' : 'text-muted-foreground hover:text-foreground'
                 }`}
-                title="Vista de tabla compacta"
+                title="Vista Planilla tipo Excel con 2 Pestañas (Repositorios + Skills dentro de los Repos)"
               >
                 <List className="size-3.5" />
+                <span>📊 Tabla Excel (Repos + Skills)</span>
               </button>
             </div>
           </div>
@@ -2770,150 +2773,18 @@ export function ReposView({
               })}
             </div>
           ) : (
-            /* Vista de Tabla Compacta */
-            <div className="overflow-x-auto rounded-xl border border-border bg-[#15171f]">
-              <table className="w-full text-left text-xs">
-                <thead className="border-b border-border bg-[#101218] text-[11px] uppercase text-muted-foreground">
-                  <tr>
-                    <th className="p-3 w-8">
-                      <input
-                        type="checkbox"
-                        checked={
-                          filteredRepositories.length > 0 &&
-                          filteredRepositories.every(r => selectedRepoKeys.has(r.fullName.toLowerCase()))
-                        }
-                        onChange={e => {
-                          if (e.target.checked) {
-                            setSelectedRepoKeys(new Set(filteredRepositories.map(r => r.fullName.toLowerCase())))
-                          } else {
-                            setSelectedRepoKeys(new Set())
-                          }
-                        }}
-                        className="rounded border-border"
-                      />
-                    </th>
-                    <th className="p-3">Repositorio</th>
-                    <th className="p-3">Tipo & Área</th>
-                    <th className="p-3">Empresa / Autor</th>
-                    <th className="p-3">Qué es y para qué proyecto sirve</th>
-                    <th className="p-3">Puntaje & Seguridad</th>
-                    <th className="p-3">Estrellas</th>
-                    <th className="p-3">Guardados</th>
-                    <th className="p-3 text-right">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/60">
-                  {paginatedRepositories.map(repo => {
-                    const key = repo.fullName.toLowerCase()
-                    const isSelected = selectedRepoKeys.has(key)
-                    const linkedPosts = getLinkedBookmarksForRepo(repo)
-                    const ev = repo.agentEvaluation
-                    return (
-                      <tr
-                        key={repo.fullName}
-                        onClick={() => {
-                          setDetailRepo(repo)
-                          setRepoChatHistory([])
-                        }}
-                        className="cursor-pointer hover:bg-[#1b1e29] transition-colors"
-                      >
-                        <td className="p-3" onClick={e => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleSelectRepo(repo.fullName)}
-                            className="rounded border-border"
-                          />
-                        </td>
-                        <td className="p-3 font-medium text-foreground whitespace-nowrap">
-                          <div className="flex items-center gap-2">
-                            <img
-                              src={repo.avatarUrl || `https://github.com/${repo.owner}.png?size=64`}
-                              alt={repo.owner}
-                              className="size-5 rounded-full"
-                            />
-                            <div>
-                              <div>{repo.fullName}</div>
-                              {repo.primaryLanguage && (
-                                <div className="text-[10px] text-muted-foreground">{repo.primaryLanguage}</div>
-                              )}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="p-3 whitespace-nowrap">
-                          <div className="flex flex-col gap-1">
-                            <span
-                              className={`inline-block w-fit rounded-md border px-2 py-0.5 text-[10px] font-medium ${getResourceTypeStyle(
-                                repo.resourceType
-                              )}`}
-                            >
-                              {repo.resourceType || 'Repositorio'}
-                            </span>
-                            {ev?.areaCategory && (
-                              <span className="text-[10px] text-muted-foreground">{ev.areaCategory}</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="p-3 whitespace-nowrap">
-                          <div className="text-xs text-zinc-200">{ev?.companyOrAuthor || `@${repo.owner}`}</div>
-                          <div className="text-[10px] text-muted-foreground">{ev?.creatorKind || 'Open Source'}</div>
-                        </td>
-                        <td className="p-3 max-w-md">
-                          <p className="line-clamp-2 text-xs text-zinc-200">
-                            {repo.shortExplanationEs || repo.description}
-                          </p>
-                          {ev?.projectUseCases && (
-                            <p className="mt-0.5 line-clamp-1 text-[10px] text-[#b4abff]">
-                              🎯 {ev.projectUseCases}
-                            </p>
-                          )}
-                        </td>
-                        <td className="p-3 whitespace-nowrap">
-                          {ev ? (
-                            <div className="flex flex-col gap-1">
-                              <span className="text-xs font-semibold text-emerald-300">
-                                ★ {ev.atlasScore.toFixed(1)} / 10
-                              </span>
-                              <span
-                                className={`inline-block w-fit rounded border px-1.5 py-0.5 text-[10px] ${
-                                  ev.securityGrade === 'Alto'
-                                    ? 'border-emerald-600/40 bg-emerald-950/30 text-emerald-300'
-                                    : ev.securityGrade === 'Medio'
-                                    ? 'border-cyan-600/40 bg-cyan-950/30 text-cyan-300'
-                                    : 'border-amber-600/40 bg-amber-950/30 text-amber-300'
-                                }`}
-                              >
-                                🛡️ {ev.securityGrade}
-                              </span>
-                            </div>
-                          ) : (
-                            '—'
-                          )}
-                        </td>
-                        <td className="p-3 whitespace-nowrap font-medium">
-                          {repo.stars > 0 ? `★ ${formatNum(repo.stars)}` : '—'}
-                        </td>
-                        <td className="p-3 whitespace-nowrap">
-                          <Badge variant="outline" className="text-[10px]">
-                            {linkedPosts.length} post{linkedPosts.length === 1 ? '' : 's'}
-                          </Badge>
-                        </td>
-                        <td className="p-3 text-right whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                          <a
-                            href={repo.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-[#9b91f5] hover:underline"
-                          >
-                            GitHub <ExternalLink className="size-3" />
-                          </a>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            /* Vista Planilla Interactiva de 2 Pestañas (Repositorios + Skills dentro de los Repositorios) */
+            <ReposSkillsExcelTable
+              bookmarks={bookmarks}
+              initialRepos={filteredRepositories}
+              onSelectRepoDetail={fullName => {
+                const found = repositories.find(r => r.fullName.toLowerCase() === fullName.toLowerCase())
+                if (found) {
+                  setDetailRepo(found)
+                  setRepoChatHistory([])
+                }
+              }}
+            />
           )}
 
           {/* Barra de Paginación Virtualizada (#3) */}

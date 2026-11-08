@@ -3,7 +3,7 @@
 import React from 'react'
 import {
   Archive, LayoutDashboard, Library, FolderGit2, Tags, FolderHeart,
-  CloudDownload, Zap, Settings2
+  CloudDownload, Zap, Settings2, Table2
 } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
 
@@ -22,6 +22,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'Fuentes', label: 'Fuentes', icon: FolderHeart },
   { id: 'Exportar', label: 'Exportar', icon: CloudDownload },
   { id: 'Captura', label: 'Captura', icon: Zap },
+  { id: 'TablaReposSkills', label: 'Tabla Repos & Skills', icon: Table2 },
 ]
 
 interface SidebarProps {

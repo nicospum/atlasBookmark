@@ -205,6 +205,13 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS repo_skill_notes (
+    skill_id TEXT PRIMARY KEY,
+    comments TEXT DEFAULT '',
+    recommended TEXT DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
 `)
 
 // Ensure new unified columns exist if migrating an older atlas.db
@@ -1182,6 +1189,52 @@ export function seedDefaultBlueprintIfNeeded() {
         'Puedes agregar o quitar repositorios desde la Galería de Repositorios y exportar este proyecto como PROMPT_MAESTRO.md o CLAUDE.md.'
     })
   } catch {}
+}
+
+export function getAllSkillNoteOverrides(): Map<
+  string,
+  { skillId: string; comments?: string; recommended?: any; updatedAt?: string }
+> {
+  const map = new Map<string, { skillId: string; comments?: string; recommended?: any; updatedAt?: string }>()
+  try {
+    const rows = db.prepare('SELECT * FROM repo_skill_notes').all() as Array<{
+      skill_id: string
+      comments: string
+      recommended: string
+      updated_at: string
+    }>
+    for (const r of rows) {
+      map.set(r.skill_id, {
+        skillId: r.skill_id,
+        comments: r.comments,
+        recommended: r.recommended || undefined,
+        updatedAt: r.updated_at
+      })
+    }
+  } catch {}
+  return map
+}
+
+export function upsertSkillNoteOverride(input: {
+  skillId: string
+  comments?: string
+  recommended?: string
+}) {
+  const now = new Date().toISOString()
+  const existing = db
+    .prepare('SELECT * FROM repo_skill_notes WHERE skill_id = ?')
+    .get(input.skillId) as { comments?: string; recommended?: string } | undefined
+
+  const nextComments = input.comments !== undefined ? input.comments : existing?.comments || ''
+  const nextRecommended =
+    input.recommended !== undefined ? input.recommended : existing?.recommended || ''
+
+  db.prepare(`
+    INSERT OR REPLACE INTO repo_skill_notes (skill_id, comments, recommended, updated_at)
+    VALUES (?, ?, ?, ?)
+  `).run(input.skillId, nextComments, nextRecommended, now)
+
+  return { skillId: input.skillId, comments: nextComments, recommended: nextRecommended, updatedAt: now }
 }
 
 export function getStorageDiagnostics(): StorageDiagnostics {
