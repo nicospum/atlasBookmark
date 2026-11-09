@@ -399,7 +399,109 @@ export interface RateLimitInfo {
   resetTime: string
 }
 
-export type AiProviderId = 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'local_rules' | 'deterministic'
+export type AiProviderId = 'hermes' | 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'local_rules' | 'deterministic'
+
+export type ThemeAccentId = 'violet' | 'emerald' | 'amber' | 'cyan'
+export type LayoutDensityMode = 'compact' | 'standard' | 'comfortable'
+export type ChatDockMode = 'right_drawer' | 'floating_window'
+export type ToolPermissionMode = 'confirm_sensitive' | 'confirm_all' | 'autonomous_safe'
+
+export type LibraryColumnId =
+  | 'fuente'
+  | 'nombre'
+  | 'proposito'
+  | 'tipo'
+  | 'temas'
+  | 'evaluacion'
+  | 'estado'
+  | 'links'
+
+export interface CustomQuickAction {
+  id: string
+  label: string
+  prompt: string
+  section: string | 'all'
+}
+
+export interface HermesAgentSettings {
+  personaName: string
+  gatewayUrl: string
+  backingProvider: 'auto' | 'gemini' | 'anthropic' | 'openai'
+  customSystemPrompt: string
+  telegramBridgeEnabled: boolean
+}
+
+export interface ConfiguredApiKeys {
+  gemini?: string
+  anthropic?: string
+  openai?: string
+  githubToken?: string
+  hermesToken?: string
+}
+
+export interface AtlasCustomizationConfig {
+  themeAccent: ThemeAccentId
+  layoutDensity: LayoutDensityMode
+  visibleSections: string[]
+  visibleLibraryColumns: LibraryColumnId[]
+  chatDockMode: ChatDockMode
+  toolPermissionMode: ToolPermissionMode
+  defaultAgentId: 'hermes' | 'gemini' | 'anthropic' | 'openai'
+  agentModels: {
+    hermes: string
+    gemini: string
+    anthropic: string
+    openai: string
+  }
+  hermesConfig: HermesAgentSettings
+  customQuickActions: CustomQuickAction[]
+  offTopicCustomKeywords: string[]
+  autoLockManualEdits: boolean
+}
+
+export type AgentToolSensitivity = 'safe' | 'write' | 'sensitive'
+
+export interface AgentToolCallRequest {
+  id: string
+  toolName: string
+  args: Record<string, any>
+  reasonEs: string
+  sensitivity: AgentToolSensitivity
+  requiresConfirmation: boolean
+}
+
+export interface AgentToolExecutionResult {
+  toolCallId: string
+  toolName: string
+  success: boolean
+  summaryEs: string
+  clientEffects?: {
+    navigateTo?: string
+    filterTopic?: string | null
+    filterAuthor?: string | null
+    searchQuery?: string
+    openBookmarkId?: string
+    openRepoFullName?: string
+    openCustomizationDrawer?: boolean
+    triggerExportFormat?: 'xlsx' | 'csv' | 'json'
+    customizationPatch?: Partial<AtlasCustomizationConfig>
+    refreshData?: boolean
+  }
+  data?: any
+}
+
+export interface AgentSectionContext {
+  activeSection: string
+  selectedTopicFilter?: string | null
+  selectedAuthorFilter?: string | null
+  selectedBookmarkId?: string | null
+  selectedBookmarkTitle?: string | null
+  selectedRepoFullName?: string | null
+  totalBookmarks: number
+  totalRepos: number
+  separatedCount: number
+  fallbackLinksCount: number
+}
 
 export interface AiProviderInfo {
   id: AiProviderId

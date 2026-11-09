@@ -899,6 +899,84 @@ test('10-Point Suite: WhatsApp Consecutive Note Fusion (#4), Cloud Sync Bundle (
   assert.ok(radar[0].highlightReasonEs.length > 3)
 })
 
+test('Global Agentic Chat (Hermes + Gemini + Claude + ChatGPT), 14 App Tools, Permission Gates & Customization Store', async () => {
+  const {
+    DEFAULT_CUSTOMIZATION_CONFIG,
+    THEME_ACCENT_PALETTES,
+    applyCustomizationPatch
+  } = require('../lib/customization-store.ts')
+  const {
+    ATLAS_AGENT_TOOLS,
+    shouldRequireToolConfirmation,
+    inferNaturalLanguageToolCalls,
+    executeAgentToolServer
+  } = require('../lib/agent-tools.ts')
+
+  // 1. Verify Customization Store defaults & Hermes primary agent
+  assert.equal(DEFAULT_CUSTOMIZATION_CONFIG.defaultAgentId, 'hermes')
+  assert.equal(DEFAULT_CUSTOMIZATION_CONFIG.visibleLibraryColumns.length, 8)
+  assert.ok(THEME_ACCENT_PALETTES.emerald.primary === '#10b981')
+
+  const patched = applyCustomizationPatch(DEFAULT_CUSTOMIZATION_CONFIG, {
+    themeAccent: 'emerald',
+    layoutDensity: 'compact'
+  })
+  assert.equal(patched.themeAccent, 'emerald')
+  assert.equal(patched.layoutDensity, 'compact')
+
+  // 2. Verify all 14 tools and permission confirmation rules
+  assert.equal(ATLAS_AGENT_TOOLS.length, 14)
+  assert.equal(shouldRequireToolConfirmation('navigate_section', 'confirm_sensitive'), false)
+  assert.equal(shouldRequireToolConfirmation('customize_interface_and_rules', 'confirm_sensitive'), false)
+  assert.equal(shouldRequireToolConfirmation('customize_interface_and_rules', 'confirm_all'), true)
+  assert.equal(shouldRequireToolConfirmation('delete_items', 'confirm_sensitive'), true)
+  assert.equal(shouldRequireToolConfirmation('delete_items', 'autonomous_safe'), true)
+  assert.equal(shouldRequireToolConfirmation('install_skill_or_mcp_local', 'confirm_sensitive'), true)
+
+  // 3. Verify Natural Language Tool Router (NLU) & Server Tool Execution
+  const mockContext = {
+    activeSection: 'Biblioteca',
+    selectedBookmarkId: 'x:3001',
+    selectedBookmarkTitle: 'Impeccable Skill',
+    totalBookmarks: 100,
+    totalRepos: 263,
+    separatedCount: 3,
+    fallbackLinksCount: 31
+  }
+
+  const navCalls = inferNaturalLanguageToolCalls(
+    'Llevame a repositorios y cambiá el tema a esmeralda con densidad compacta',
+    mockContext,
+    'confirm_sensitive'
+  )
+  assert.ok(navCalls.some(c => c.toolName === 'navigate_section' && c.args.section === 'Repositorios'))
+  assert.ok(
+    navCalls.some(
+      c =>
+        c.toolName === 'customize_interface_and_rules' &&
+        c.args.themeAccent === 'emerald' &&
+        c.args.layoutDensity === 'compact'
+    )
+  )
+
+  const execNav = await executeAgentToolServer(navCalls[0], {
+    sectionContext: mockContext,
+    currentCustomization: DEFAULT_CUSTOMIZATION_CONFIG
+  })
+  assert.equal(execNav.success, true)
+  assert.equal(execNav.clientEffects.navigateTo, 'Repositorios')
+
+  // Sensitive delete intent requires explicit confirmation
+  const delCalls = inferNaturalLanguageToolCalls(
+    'Eliminá este guardado seleccionado',
+    mockContext,
+    'confirm_sensitive'
+  )
+  assert.equal(delCalls.length, 1)
+  assert.equal(delCalls[0].toolName, 'delete_items')
+  assert.equal(delCalls[0].requiresConfirmation, true)
+})
+
 after(() => {
   try {
     db.close()

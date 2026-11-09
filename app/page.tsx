@@ -1,14 +1,16 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  Archive, Menu, Search, RefreshCw, AlertTriangle
+  Archive, Menu, Search, RefreshCw, AlertTriangle, Bot, Sliders
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sidebar } from '@/components/sidebar'
 import { DetailSheet } from '@/components/detail-sheet'
 import { CommandPalette } from '@/components/command-palette'
+import { CustomizationDrawer } from '@/components/customization-drawer'
+import { GlobalAgentChat } from '@/components/global-agent-chat'
 import { OverviewView } from '@/components/views/overview-view'
 import { LibraryView } from '@/components/views/library-view'
 import { ReposView } from '@/components/views/repos-view'
@@ -17,8 +19,29 @@ import { SourcesView } from '@/components/views/sources-view'
 import { ExportView } from '@/components/views/export-view'
 import { CaptureView } from '@/components/views/capture-view'
 import { ReposSkillsExcelTable } from '@/components/repos-skills-excel-table'
-import { BookmarkItem, ImportHistoryEntry, StorageDiagnostics } from '@/lib/types'
+import {
+  AgentSectionContext,
+  AgentToolExecutionResult,
+  AtlasCustomizationConfig,
+  BookmarkItem,
+  ImportHistoryEntry,
+  StorageDiagnostics
+} from '@/lib/types'
 import { applyDurableClientStateToBookmarks } from '@/lib/client-persistence'
+import {
+  DEFAULT_CUSTOMIZATION_CONFIG,
+  loadCustomizationConfig,
+  saveCustomizationConfig,
+  applyCustomizationPatch,
+  THEME_ACCENT_PALETTES
+} from '@/lib/customization-store'
+import {
+  generateExcelFile,
+  downloadCsvFile,
+  downloadJsonBackupFile,
+  TABLE_DEFAULT_COLUMNS,
+  ALL_SHEETS
+} from '@/lib/excel-export'
 
 export default function AtlasApp() {
   const [active, setActive] = useState('Resumen')
@@ -35,6 +58,15 @@ export default function AtlasApp() {
   const [isLoading, setIsLoading] = useState(true)
   const [selectedTopicFilter, setSelectedTopicFilter] = useState<string | null>(null)
   const [selectedAuthorFilter, setSelectedAuthorFilter] = useState<string | null>(null)
+  const [customization, setCustomization] = useState<AtlasCustomizationConfig>(
+    DEFAULT_CUSTOMIZATION_CONFIG
+  )
+  const [customizationDrawerOpen, setCustomizationDrawerOpen] = useState(false)
+  const [agentChatOpen, setAgentChatOpen] = useState(false)
+
+  useEffect(() => {
+    setCustomization(loadCustomizationConfig())
+  }, [])
 
   // Fetch bookmarks & history from SQLite API
   const refreshBookmarks = useCallback(async () => {
@@ -279,14 +311,122 @@ export default function AtlasApp() {
     setActive('Repositorios')
   }
 
+  const handleChangeCustomization = (next: AtlasCustomizationConfig) => {
+    setCustomization(next)
+    saveCustomizationConfig(next)
+  }
+
+  const handleUpdateCustomizationPatch = (patch: Partial<AtlasCustomizationConfig>) => {
+    setCustomization(prev => applyCustomizationPatch(prev, patch))
+  }
+
+  const handleExecuteClientEffects = useCallback(
+    async (effects: NonNullable<AgentToolExecutionResult['clientEffects']>) => {
+      if (effects.customizationPatch) {
+        setCustomization(prev => applyCustomizationPatch(prev, effects.customizationPatch!))
+      }
+      if (effects.openCustomizationDrawer) {
+        setCustomizationDrawerOpen(true)
+      }
+      if (effects.filterTopic !== undefined) {
+        setSelectedTopicFilter(effects.filterTopic)
+      }
+      if (effects.filterAuthor !== undefined) {
+        setSelectedAuthorFilter(effects.filterAuthor)
+      }
+      if (effects.openRepoFullName) {
+        setDetailOpen(false)
+        setSelectedRepoFullName(effects.openRepoFullName)
+        setActive('Repositorios')
+      } else if (effects.navigateTo) {
+        setActive(effects.navigateTo)
+      }
+      if (effects.refreshData) {
+        await refreshBookmarks()
+      }
+      if (effects.openBookmarkId) {
+        const found = bookmarks.find(b => b.id === effects.openBookmarkId)
+        if (found) {
+          setSelectedDetailItem(found)
+          setDetailOpen(true)
+        }
+      }
+      if (effects.triggerExportFormat) {
+        if (effects.triggerExportFormat === 'xlsx') {
+          generateExcelFile(
+            bookmarks,
+            ALL_SHEETS,
+            TABLE_DEFAULT_COLUMNS,
+            `atlas_catalogo_maestro_${new Date().toISOString().slice(0, 10)}.xlsx`
+          )
+        } else if (effects.triggerExportFormat === 'csv') {
+          downloadCsvFile(
+            bookmarks,
+            TABLE_DEFAULT_COLUMNS,
+            `atlas_guardados_${new Date().toISOString().slice(0, 10)}.csv`
+          )
+        } else if (effects.triggerExportFormat === 'json') {
+          downloadJsonBackupFile(
+            bookmarks,
+            `atlas_backup_${new Date().toISOString().slice(0, 10)}.json`
+          )
+        }
+      }
+    },
+    [bookmarks, refreshBookmarks]
+  )
+
+  const sectionContext: AgentSectionContext = useMemo(() => {
+    const separatedCount = bookmarks.filter(
+      b => b.resourceType === 'Archivo separado / Otro tema (No técnico)'
+    ).length
+    const fallbackLinksCount = bookmarks.filter(b =>
+      (b.resources || []).some(r => r.id?.startsWith('fallback_ref:'))
+    ).length
+    return {
+      activeSection: active,
+      selectedTopicFilter,
+      selectedAuthorFilter,
+      selectedBookmarkId: selectedDetailItem?.id || null,
+      selectedBookmarkTitle: selectedDetailItem?.title || null,
+      selectedRepoFullName,
+      totalBookmarks: bookmarks.length,
+      totalRepos: reposCount || 263,
+      separatedCount,
+      fallbackLinksCount
+    }
+  }, [
+    active,
+    selectedTopicFilter,
+    selectedAuthorFilter,
+    selectedDetailItem,
+    selectedRepoFullName,
+    bookmarks,
+    reposCount
+  ])
+
+  const accentPalette = THEME_ACCENT_PALETTES[customization.themeAccent || 'violet']
+
   return (
-    <div className="min-h-screen bg-background text-foreground selection:bg-[#7c6cf0]/30 selection:text-white">
+    <div
+      className={`min-h-screen bg-background text-foreground selection:bg-[#7c6cf0]/30 selection:text-white ${
+        customization.layoutDensity === 'compact'
+          ? 'text-[13px]'
+          : customization.layoutDensity === 'comfortable'
+          ? 'leading-relaxed'
+          : ''
+      }`}
+    >
       {/* Sidebar fijo para escritorio */}
       <Sidebar
         active={active}
         setActive={setActive}
         totalCount={bookmarks.length}
         reposCount={reposCount}
+        visibleSections={customization.visibleSections}
+        themeAccent={customization.themeAccent}
+        onOpenAgentChat={() => setAgentChatOpen(true)}
+        onOpenCustomization={() => setCustomizationDrawerOpen(true)}
       />
 
       <main className="min-h-screen lg:pl-[248px]">
@@ -352,6 +492,30 @@ export default function AtlasApp() {
               >
                 <RefreshCw className={`size-3 mr-1 ${isLoading ? 'animate-spin' : ''}`} /> Refrescar DB
               </Button>
+
+              <button
+                onClick={() => setCustomizationDrawerOpen(true)}
+                className="flex items-center gap-1.5 rounded-md border border-border bg-[#16181f] px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-[#7c6cf0]/50 hover:text-foreground"
+                title="Herramientas de Customización (Apariencia, Columnas, Reglas Off-Topic y Permisos)"
+              >
+                <Sliders className="size-3.5 text-[#a59cf5]" />
+                <span>Customizar</span>
+              </button>
+
+              <button
+                onClick={() => setAgentChatOpen(!agentChatOpen)}
+                style={{
+                  backgroundColor: accentPalette.badgeBg,
+                  color: accentPalette.badgeText,
+                  borderColor: accentPalette.border
+                }}
+                className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-opacity hover:opacity-90"
+                title="Abrir Chat Agéntico Global con Hermes, Gemini, Claude y ChatGPT (Ctrl+J)"
+              >
+                <Bot className="size-3.5" />
+                <span>Chat Agéntico (Hermes)</span>
+                <kbd className="rounded bg-black/30 px-1.5 py-0.2 text-[10px]">Ctrl+J</kbd>
+              </button>
 
               <button
                 onClick={() => setCommandPaletteOpen(true)}
@@ -441,6 +605,7 @@ export default function AtlasApp() {
               onRefresh={refreshBookmarks}
               externalTopicFilter={selectedTopicFilter}
               externalAuthorFilter={selectedAuthorFilter}
+              customizedVisibleColumns={customization.visibleLibraryColumns}
               onClearExternalFilters={() => {
                 setSelectedTopicFilter(null)
                 setSelectedAuthorFilter(null)
@@ -525,6 +690,25 @@ export default function AtlasApp() {
         onNavigateView={setActive}
         onSelectBookmark={handleOpenDetail}
         onSelectRepo={handleOpenRepoInGallery}
+      />
+
+      {/* Panel de Herramientas de Customización (Fase Previa y Runtime) */}
+      <CustomizationDrawer
+        open={customizationDrawerOpen}
+        onOpenChange={setCustomizationDrawerOpen}
+        config={customization}
+        onChangeConfig={handleChangeCustomization}
+      />
+
+      {/* Chat Agéntico Global (Hermes Principal + Gemini, Claude, ChatGPT con Tool Calling) */}
+      <GlobalAgentChat
+        open={agentChatOpen}
+        onOpenChange={setAgentChatOpen}
+        sectionContext={sectionContext}
+        customization={customization}
+        onUpdateCustomization={handleUpdateCustomizationPatch}
+        onOpenCustomizationDrawer={() => setCustomizationDrawerOpen(true)}
+        onExecuteClientEffects={handleExecuteClientEffects}
       />
     </div>
   )

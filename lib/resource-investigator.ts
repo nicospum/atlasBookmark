@@ -161,6 +161,21 @@ export function classifyGitHubUrl(rawUrl: string): ParsedGitHubUrl | null {
 
     const owner = parts[0]
     const repo = parts[1].replace(/\.git$/i, '')
+    const ownerLower = owner.toLowerCase()
+    const repoLower = repo.toLowerCase()
+    if (
+      ownerLower === 'owner' ||
+      ownerLower === 'user' ||
+      ownerLower === 'username' ||
+      ownerLower === 'your-username' ||
+      ownerLower === 'your_username' ||
+      ownerLower === 'example' ||
+      repoLower === 'repo' ||
+      repoLower === 'repository' ||
+      repoLower === 'your-repo'
+    ) {
+      return null
+    }
     if (!owner || !repo || repo === 'followers' || repo === 'following' || repo === 'repositories' || repo === 'stars') {
       return {
         kind: 'github_other',

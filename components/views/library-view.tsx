@@ -30,7 +30,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { AnalysisState, BookmarkItem, ResourceType, SourcePlatform } from '@/lib/types'
+import { AnalysisState, BookmarkItem, LibraryColumnId, ResourceType, SourcePlatform } from '@/lib/types'
 import {
   generateExcelFile,
   downloadCsvFile,
@@ -58,7 +58,19 @@ interface LibraryViewProps {
   onRefresh?: () => Promise<void>
   externalTopicFilter?: string | null
   externalAuthorFilter?: string | null
+  customizedVisibleColumns?: LibraryColumnId[]
   onClearExternalFilters?: () => void
+}
+
+const COLUMN_ID_TO_LABEL: Record<LibraryColumnId, string> = {
+  nombre: 'Nombre / recurso',
+  proposito: 'Para qué sirve',
+  tipo: 'Tipo',
+  temas: 'Área / tema',
+  links: 'Enlaces útiles',
+  evaluacion: 'Evaluación breve',
+  estado: 'Estado del análisis',
+  fuente: 'Origen'
 }
 
 const PAGE_SIZE = 50
@@ -74,6 +86,7 @@ export function LibraryView({
   onRefresh,
   externalTopicFilter,
   externalAuthorFilter,
+  customizedVisibleColumns,
   onClearExternalFilters
 }: LibraryViewProps) {
   const [search, setSearch] = useState('')
@@ -108,6 +121,17 @@ export function LibraryView({
       setCurrentPage(1)
     }
   }, [externalAuthorFilter])
+
+  useEffect(() => {
+    if (Array.isArray(customizedVisibleColumns) && customizedVisibleColumns.length > 0) {
+      const mapped = customizedVisibleColumns
+        .map(id => COLUMN_ID_TO_LABEL[id])
+        .filter(Boolean)
+      if (mapped.length > 0) {
+        setVisibleColumns(mapped)
+      }
+    }
+  }, [customizedVisibleColumns])
 
   const allTopics = useMemo(() => {
     const set = new Set<string>()
