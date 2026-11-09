@@ -42,6 +42,16 @@ import {
   skillBuildFallbackReferenceLink
 } from '@/lib/web-navigator-agent'
 import { classifyGitHubUrl } from '@/lib/resource-investigator'
+import {
+  applyDurableClientStateToBookmarks,
+  applyDurableClientStateToRepos,
+  installSkillOrRepoUniversal,
+  readDurableClientState,
+  recordDurableBookmarkOverride,
+  recordDurableRepoNote,
+  recordDurableSkillNote,
+  replayDurableStateToServer
+} from '@/lib/client-persistence'
 
 interface ReposSkillsExcelTableProps {
   bookmarks?: BookmarkItem[]
@@ -90,6 +100,20 @@ export function ReposSkillsExcelTable({
   const [editingRepoNote, setEditingRepoNote] = useState<string>('')
   const [savingId, setSavingId] = useState<string | null>(null)
   const [copiedCmdId, setCopiedCmdId] = useState<string | null>(null)
+  const [installingId, setInstallingId] = useState<string | null>(null)
+
+  const applySkillDurableNotes = useCallback((rawSkills: ExtractedRepoSkill[]): ExtractedRepoSkill[] => {
+    const durable = readDurableClientState()
+    return rawSkills.map(s => {
+      const note = durable.skillNotes[s.id]
+      if (!note) return s
+      return {
+        ...s,
+        ...(note.comments !== undefined ? { comments: note.comments } : {}),
+        ...(note.recommended !== undefined ? { recommended: note.recommended } : {})
+      }
+    })
+  }, [])
 
   const fetchReposAndSkills = useCallback(async () => {
     setIsLoading(true)
@@ -97,38 +121,41 @@ export function ReposSkillsExcelTable({
       const res = await fetch('/api/github/repos')
       const data = await res.json().catch(() => null)
       if (res.ok && data?.success) {
-        const loadedRepos: GalleryRepository[] = data.repositories || []
+        const rawRepos: GalleryRepository[] = data.repositories || []
+        const loadedRepos = applyDurableClientStateToRepos(rawRepos)
         setRepos(loadedRepos)
-        if (Array.isArray(data.skills) && data.skills.length > 0) {
-          setSkills(data.skills)
-        } else {
-          setSkills(extractAllSkillsFromRepositories(loadedRepos, bookmarks))
-        }
+        const baseSkills =
+          Array.isArray(data.skills) && data.skills.length > 0
+            ? data.skills
+            : extractAllSkillsFromRepositories(loadedRepos, bookmarks)
+        setSkills(applySkillDurableNotes(baseSkills))
+        replayDurableStateToServer(rawRepos, bookmarks).catch(() => {})
       }
     } catch (err) {
       console.error('Error cargando tabla de repositorios y skills:', err)
     } finally {
       setIsLoading(false)
     }
-  }, [bookmarks])
+  }, [bookmarks, applySkillDurableNotes])
 
   useEffect(() => {
-    setLocalBookmarks(bookmarks)
+    setLocalBookmarks(applyDurableClientStateToBookmarks(bookmarks))
   }, [bookmarks])
 
   useEffect(() => {
     if (initialRepos && initialRepos.length > 0) {
-      setRepos(initialRepos)
+      const mergedRepos = applyDurableClientStateToRepos(initialRepos)
+      setRepos(mergedRepos)
       if (initialSkills && initialSkills.length > 0) {
-        setSkills(initialSkills)
+        setSkills(applySkillDurableNotes(initialSkills))
       } else {
-        setSkills(extractAllSkillsFromRepositories(initialRepos, bookmarks))
+        setSkills(applySkillDurableNotes(extractAllSkillsFromRepositories(mergedRepos, bookmarks)))
       }
       setIsLoading(false)
     } else {
       fetchReposAndSkills()
     }
-  }, [initialRepos, initialSkills, bookmarks, fetchReposAndSkills])
+  }, [initialRepos, initialSkills, bookmarks, fetchReposAndSkills, applySkillDurableNotes])
 
   // Reset pagination when filters or sheet change
   useEffect(() => {
@@ -432,6 +459,14 @@ export function ReposSkillsExcelTable({
     const nextTopics = moveToSeparated
       ? Array.from(new Set(['Archivos Separados / Otros Temas', ...(bm.topics || []).filter(t => t !== 'Sin clasificar')]))
       : (bm.topics || []).filter(t => t !== 'Archivos Separados / Otros Temas')
+    const finalTopics = nextTopics.length > 0 ? nextTopics : ['IA']
+    const nextManualFields = Array.from(new Set([...(bm.manualFields || []), 'resourceType', 'topics']))
+
+    recordDurableBookmarkOverride(bm.id, {
+      resourceType: nextResourceType,
+      topics: finalTopics,
+      manualFields: nextManualFields
+    })
 
     setLocalBookmarks(prev =>
       prev.map(item =>
@@ -439,7 +474,8 @@ export function ReposSkillsExcelTable({
           ? {
               ...item,
               resourceType: nextResourceType,
-              topics: nextTopics.length > 0 ? nextTopics : ['IA']
+              topics: finalTopics,
+              manualFields: nextManualFields as any
             }
           : item
       )
@@ -451,7 +487,7 @@ export function ReposSkillsExcelTable({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           resourceType: nextResourceType,
-          topics: nextTopics.length > 0 ? nextTopics : ['IA'],
+          topics: finalTopics,
           evaluation: moveToSeparated
             ? 'Marcado como Archivo Separado (Fuera del radar técnico) para mantener limpia la biblioteca.'
             : 'Restaurado al Radar Técnico de IA, programación y herramientas.'
@@ -470,6 +506,7 @@ export function ReposSkillsExcelTable({
     updates: { comments?: string; recommended?: SkillRecommendationVerdict }
   ) => {
     setSavingId(skillId)
+    recordDurableSkillNote(skillId, updates)
     setSkills(prev =>
       prev.map(s => (s.id === skillId ? { ...s, ...updates } : s))
     )
@@ -493,6 +530,7 @@ export function ReposSkillsExcelTable({
 
   const handleSaveRepoNote = async (fullName: string, notes: string) => {
     setSavingId(fullName)
+    recordDurableRepoNote(fullName, notes)
     setRepos(prev =>
       prev.map(r => (r.fullName === fullName ? { ...r, notes } : r))
     )
@@ -511,6 +549,22 @@ export function ReposSkillsExcelTable({
     } finally {
       setSavingId(null)
       setEditingRepoName(null)
+    }
+  }
+
+  const handleInstallSkillUniversal = async (fullName: string, skillId: string) => {
+    setInstallingId(skillId)
+    setAgentStatusMsg(`Instalando ${fullName} en 1 clic...`)
+    try {
+      const res = await installSkillOrRepoUniversal({
+        fullName,
+        installMode: 'skill_clone'
+      })
+      setAgentStatusMsg(`✅ ${res.messageEs}`)
+    } catch (err: any) {
+      setAgentStatusMsg(`⚠️ ${err?.message || 'Error al instalar skill.'}`)
+    } finally {
+      setInstallingId(null)
     }
   }
 
@@ -1391,14 +1445,27 @@ export function ReposSkillsExcelTable({
                               )}
                             </button>
                           </div>
-                          <a
-                            href={skill.skillUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:underline"
-                          >
-                            Ver Skill <ExternalLink className="size-2.5" />
-                          </a>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              disabled={installingId === skill.id}
+                              onClick={() => handleInstallSkillUniversal(skill.repoFullName, skill.id)}
+                              className="h-6 border-emerald-500/40 bg-emerald-500/10 px-2 text-[10px] text-emerald-300 hover:bg-emerald-500/20"
+                              title="Instala en 1 clic en tu PC (vía puente local localhost:3071 o descarga portátil SKILL.md en Vercel)"
+                            >
+                              <Download className="mr-1 size-2.5" />
+                              {installingId === skill.id ? 'Instalando...' : 'Instalar en PC'}
+                            </Button>
+                            <a
+                              href={skill.skillUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:underline"
+                            >
+                              Ver Skill <ExternalLink className="size-2.5" />
+                            </a>
+                          </div>
                         </div>
                       </td>
                     </tr>

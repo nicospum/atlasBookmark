@@ -109,17 +109,50 @@ export function evaluateBookmarkScopeAndOffTopic(input: {
   mediaType?: string
   mediaUrls?: string[]
   topics?: string[]
+  resourceType?: string
+  manualFields?: string[]
 }): OffTopicClassificationResult {
   const caption = (input.caption || '').trim()
   const title = (input.title || '').trim()
   const links = input.outgoingLinks || []
   const combinedText = `${title} ${caption} ${links.join(' ')}`.trim()
   const cleanBody = stripClickbait(caption)
+  const manualSet = new Set(input.manualFields || [])
 
-  // 1. Si es de plataforma GitHub o contiene un link directo a github.com o huggingface.co, es 100% Radar Técnico
+  // 0. Respetar 100% cualquier decisión manual previa del usuario (bloqueo estricto contra sobreescritura)
+  if (manualSet.has('resourceType') || manualSet.has('topics')) {
+    const isManuallyOffTopic =
+      input.resourceType === 'Archivo separado / Otro tema (No técnico)' ||
+      (input.topics || []).includes('Archivos Separados / Otros Temas')
+    if (isManuallyOffTopic) {
+      return {
+        isOffTopic: true,
+        scope: 'archivo_separado_otro_tema',
+        categoryLabel: 'Actualidad, Cultura o Notas Personales',
+        reasonEs: 'Separado manualmente por el usuario (decisión bloqueada y protegida).',
+        suggestedResourceType: 'Archivo separado / Otro tema (No técnico)',
+        suggestedTopics: input.topics || ['Archivos Separados / Otros Temas']
+      }
+    }
+    return {
+      isOffTopic: false,
+      scope: 'radar_tecnico',
+      categoryLabel: 'Radar Técnico (IA, Código & Herramientas)',
+      reasonEs: 'Confirmado manualmente por el usuario dentro del Radar Técnico.',
+      suggestedTopics: input.topics || ['Programación']
+    }
+  }
+
+  // 1. Si es de plataforma GitHub o contiene un link directo a github.com, huggingface.co, arxiv.org o dominios técnicos (.dev, .sh, .ai, docs.)
+  const hasTechDomainLink = links.some(u =>
+    /github\.com\/|huggingface\.co\/|arxiv\.org\/|npmjs\.com\/|pypi\.org\/|substack\.com\/|(?:\.[a-z0-9-]+\.(?:dev|sh|ai))(?:\/|$)/i.test(
+      u
+    ) && !CASUAL_GAME_OR_TOY_DOMAINS.some(d => u.toLowerCase().includes(d))
+  )
+
   if (
     input.platform === 'github' ||
-    links.some(u => /github\.com\/|huggingface\.co\/|arxiv\.org\//i.test(u)) ||
+    hasTechDomainLink ||
     /github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+/i.test(combinedText)
   ) {
     return {
@@ -148,12 +181,16 @@ export function evaluateBookmarkScopeAndOffTopic(input: {
     }
   }
 
-  const hasStrongTech = STRONG_TECH_SIGNALS.test(combinedText)
+  // También considerar si el handle del autor tiene señal técnica clara (ej. @...AI, @...dev, @...labs)
+  const authorSignal = `${input.authorHandle || ''} ${input.authorName || ''}`
+  const isKnownTechAuthor = /\b(ai|dev|labs|code|tech|claude|openai|anthropic|github|agent|data)\b/i.test(
+    authorSignal
+  )
+  const hasStrongTech = STRONG_TECH_SIGNALS.test(combinedText) || isKnownTechAuthor
 
   // 3. Evaluar reglas explícitas de temas no técnicos (Fotos personales, Deportes, Gastronomía, Viajes, Compras, Juegos/Ocio)
   for (const rule of OFF_TOPIC_RULES) {
     if (rule.pattern.test(combinedText)) {
-      // Si tiene una señal muy fuerte de herramienta/código (salvo el caso de vibe-coded game casual que ya filtramos), priorizar técnico
       const isCasualGameMatch = rule.categoryLabel === 'Juegos Casuales y Entretenimiento'
       if (!hasStrongTech || isCasualGameMatch) {
         return {
@@ -177,7 +214,6 @@ export function evaluateBookmarkScopeAndOffTopic(input: {
     (Array.isArray(input.mediaUrls) && input.mediaUrls.length > 0)
 
   if (!hasStrongTech && nonSocialLinks.length === 0) {
-    // Si es solo una foto/video con texto vacío o muy corto (< 25 chars) sin ninguna palabra técnica
     if (hasMedia && cleanBody.length < 30) {
       return {
         isOffTopic: true,
@@ -190,7 +226,6 @@ export function evaluateBookmarkScopeAndOffTopic(input: {
       }
     }
 
-    // Si los temas detectados son únicamente Viajes o Cultura sin ninguna señal técnica
     const currentTopics = (input.topics || []).filter(t => t !== 'Sin clasificar')
     const onlyNonTechTopics =
       currentTopics.length > 0 &&
@@ -314,8 +349,9 @@ export interface WebNavigatorAgentOutput {
 }
 
 /**
- * SKILL 1: Navega hilos, respuestas/comentarios de X, artículos de X y tweets citados/videos originales
- * utilizando FxTwitter (incluyendo bio/website del autor y video embebido de otro autor) + Jina Reader (`r.jina.ai`).
+ * SKILL 1: Navega hilos, respuestas/comentarios de X, artículos de X, API de Sindicación oficial de X,
+ * tweets padres en hilos, tweets originales de videos repostados (`source_status_id`), bio/website del autor,
+ * coincidencia con el perfil de GitHub del autor (`github.com/<handle>?tab=repositories`) y Jina Reader.
  */
 export async function skillInspectSocialThreadAndComments(
   urlsToInspect: string[],
@@ -326,10 +362,12 @@ export async function skillInspectSocialThreadAndComments(
   authorHandle?: string
   expandedUrls: string[]
   discoveredRepos: NavigatorDiscoveredRepo[]
+  discoveredMediaThumbnails: string[]
 }> {
   const recoveredTextChunks: string[] = []
   const expandedUrls = new Set<string>()
   const discoveredRepos: NavigatorDiscoveredRepo[] = []
+  const discoveredMediaThumbnails = new Set<string>()
   let authorName: string | undefined
   let authorHandle: string | undefined
 
@@ -355,7 +393,6 @@ export async function skillInspectSocialThreadAndComments(
     }
   }
 
-  // Also check if any URL in urlsToInspect is an embedded video from ANOTHER tweet (e.g. https://x.com/oliviscusAI/status/2105289754225078715/video/1)
   const allTweetStatusUrls = new Set<string>()
   for (const u of urlsToInspect) {
     const m = u.match(/https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/([A-Za-z0-9_]+)\/status\/(\d+)/i)
@@ -364,17 +401,23 @@ export async function skillInspectSocialThreadAndComments(
     }
   }
 
-  for (const statusUrl of Array.from(allTweetStatusUrls).slice(0, 3)) {
+  const statusQueue = Array.from(allTweetStatusUrls).slice(0, 4)
+  const visitedStatusIds = new Set<string>()
+
+  for (let i = 0; i < statusQueue.length; i++) {
+    const statusUrl = statusQueue[i]
     const m = statusUrl.match(/x\.com\/([A-Za-z0-9_]+)\/status\/(\d+)/i)
     if (!m) continue
     const user = m[1]
     const statusId = m[2]
+    if (visitedStatusIds.has(statusId)) continue
+    visitedStatusIds.add(statusId)
 
-    // 1A. Consultar api.fxtwitter.com incluyendo autor, bio, website y tweet citado
+    // 1A. Consultar api.fxtwitter.com incluyendo autor, bio, website, tweet citado y videos originales
     try {
       const fxRes = await fetch(`https://api.fxtwitter.com/${user}/status/${statusId}`, {
         headers: { 'User-Agent': 'AtlasWebNavigatorAgent/3.0', Accept: 'application/json' },
-        signal: AbortSignal.timeout(5500)
+        signal: AbortSignal.timeout(5000)
       })
       if (fxRes.ok) {
         const data = await fxRes.json()
@@ -409,7 +452,22 @@ export async function skillInspectSocialThreadAndComments(
             if (rUrl) {
               expandedUrls.add(rUrl)
               addRepo(rUrl, 'tweet_hydration', `Enlace expandido del post de @${user}`)
+              // Si el enlace expandido es un video embebido de OTRO autor (ej. https://x.com/otro/status/123/video/1), agregarlo a la cola
+              const vidOrigin = rUrl.match(/x\.com\/([A-Za-z0-9_]+)\/status\/(\d+)/i)
+              if (vidOrigin && !visitedStatusIds.has(vidOrigin[2]) && statusQueue.length < 6) {
+                statusQueue.push(`https://x.com/${vidOrigin[1]}/status/${vidOrigin[2]}`)
+              }
             }
+          }
+
+          // Extraer miniaturas de fotos/videos para inspección visual OCR si hace falta
+          const photos = Array.isArray(tw.media?.photos) ? tw.media.photos : []
+          for (const p of photos) {
+            if (p?.url) discoveredMediaThumbnails.add(String(p.url))
+          }
+          const videos = Array.isArray(tw.media?.videos) ? tw.media.videos : []
+          for (const v of videos) {
+            if (v?.thumbnail_url) discoveredMediaThumbnails.add(String(v.thumbnail_url))
           }
 
           if (tw.quote?.text) {
@@ -420,7 +478,58 @@ export async function skillInspectSocialThreadAndComments(
       }
     } catch {}
 
-    // 1B. Si aún no tenemos un repo de GitHub y el post sugiere hilo/comentario, usar Jina Reader para leer respuestas del hilo
+    // 1B. Consultar API de Sindicación de X (cdn.syndication.twimg.com) para recuperar:
+    // - Tweet padre (`parent`) cuando es parte de un hilo
+    // - `source_status_id_str` cuando el video fue subido originalmente en otro tweet donde sí estaba el link
+    // - `ext_alt_text` (texto alternativo / OCR de imágenes) y `card.binding_values` (URLs ocultas en tarjetas)
+    try {
+      const synRes = await fetch(
+        `https://cdn.syndication.twimg.com/tweet-result?id=${statusId}&token=x`,
+        {
+          headers: { 'User-Agent': 'Mozilla/5.0 (compatible; AtlasSyndication/3.0)' },
+          signal: AbortSignal.timeout(4000)
+        }
+      )
+      if (synRes.ok) {
+        const syn = await synRes.json()
+        if (syn?.parent?.id_str && !visitedStatusIds.has(String(syn.parent.id_str)) && statusQueue.length < 6) {
+          const pUser = syn.parent?.user?.screen_name || user
+          statusQueue.push(`https://x.com/${pUser}/status/${syn.parent.id_str}`)
+        }
+        if (syn?.parent?.text) {
+          recoveredTextChunks.push(`[Hilo principal]: ${String(syn.parent.text)}`)
+        }
+        const synUrls = [
+          ...(Array.isArray(syn?.entities?.urls) ? syn.entities.urls : []),
+          ...(Array.isArray(syn?.parent?.entities?.urls) ? syn.parent.entities.urls : [])
+        ]
+        for (const uObj of synUrls) {
+          const exp = cleanUrlString(uObj?.expanded_url || uObj?.url || '')
+          if (exp) {
+            expandedUrls.add(exp)
+            addRepo(exp, 'tweet_hydration', `Recuperado de tarjeta/entidad de sindicación de X`)
+          }
+        }
+        const mediaDetails = Array.isArray(syn?.mediaDetails) ? syn.mediaDetails : []
+        for (const md of mediaDetails) {
+          if (md?.ext_alt_text) {
+            recoveredTextChunks.push(`[Texto en imagen]: ${String(md.ext_alt_text)}`)
+            const altGh = String(md.ext_alt_text).matchAll(/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/gi)
+            for (const ag of altGh) {
+              addRepo(ag[1], 'tweet_hydration', `Extraído del texto alternativo de la imagen`)
+            }
+          }
+          if (md?.media_url_https) {
+            discoveredMediaThumbnails.add(String(md.media_url_https))
+          }
+          if (md?.source_status_id_str && !visitedStatusIds.has(String(md.source_status_id_str)) && statusQueue.length < 6) {
+            statusQueue.push(`https://x.com/i/status/${md.source_status_id_str}`)
+          }
+        }
+      }
+    } catch {}
+
+    // 1C. Si aún no tenemos un repo de GitHub y el post sugiere hilo/comentario, usar Jina Reader para leer respuestas del hilo
     const hintsThreadOrReply =
       /\b(thread|hilo|below|reply|replies|comment|comentarios|bio|abajo|debajo)\b|[🧵👇⬇️]/i.test(
         existingCaption
@@ -447,7 +556,6 @@ export async function skillInspectSocialThreadAndComments(
               `Descubierto navegando el hilo y comentarios de ${statusUrl}`
             )
           }
-          // También extraer links externos útiles que aparezcan en los comentarios del autor
           const extMatches = markdown.matchAll(/https?:\/\/[^\s)"'<>[\]]+/gi)
           for (const em of extMatches) {
             const cu = cleanUrlString(em[0])
@@ -464,11 +572,248 @@ export async function skillInspectSocialThreadAndComments(
     }
   }
 
+  // 1D. Si X bloqueó las respuestas por Login Wall pero conocemos el @handle del autor,
+  // inspeccionamos directamente el perfil público de GitHub del autor (`https://github.com/<handle>?tab=repositories`)
+  // para ver si el autor publicó ahí el repositorio que anuncia en su post!
+  if (discoveredRepos.length === 0 && authorHandle) {
+    const cleanHandle = authorHandle.replace(/^@/, '').trim()
+    if (cleanHandle.length >= 3 && !/^(?:whatsapp|instagram|twitter|x)$/i.test(cleanHandle)) {
+      try {
+        const ghProfileRes = await fetch(
+          `https://github.com/${encodeURIComponent(cleanHandle)}?tab=repositories`,
+          {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              Accept: 'text/html'
+            },
+            signal: AbortSignal.timeout(4500)
+          }
+        )
+        if (ghProfileRes.ok) {
+          const html = (await ghProfileRes.text()).slice(0, 80000)
+          const combinedContext = `${existingCaption} ${recoveredTextChunks.join(' ')}`.toLowerCase()
+          const repoLinks = Array.from(
+            html.matchAll(
+              new RegExp(`href="/(${cleanHandle}/[A-Za-z0-9_.-]+)"\\s+itemprop="name\\s+codeRepository"`, 'gi')
+            )
+          ).map(m => m[1])
+
+          for (const fullName of repoLinks.slice(0, 12)) {
+            const repoName = fullName.split('/')[1]?.toLowerCase() || ''
+            const repoTokens = repoName.split(/[-_.]/).filter(t => t.length >= 3)
+            const matchesPost =
+              repoName.length >= 4 &&
+              (combinedContext.includes(repoName) ||
+                (repoTokens.length >= 2 && repoTokens.every(t => combinedContext.includes(t))))
+            if (matchesPost) {
+              addRepo(
+                fullName,
+                'author_bio_or_quote',
+                `Hallado en el perfil de GitHub del autor (@${cleanHandle}) sorteando el bloqueo de comentarios de X`
+              )
+              break
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
   return {
     recoveredTextChunks,
     authorName,
     authorHandle,
     expandedUrls: Array.from(expandedUrls),
+    discoveredRepos,
+    discoveredMediaThumbnails: Array.from(discoveredMediaThumbnails)
+  }
+}
+
+/**
+ * SKILL 1.5 (Punto 2): Inspección Visual OCR y Multimodal de Videos o Capturas "Mudas"
+ * Cuando un post solo tiene un video o captura de pantalla y el texto no dice el nombre de la herramienta,
+ * inspecciona la miniatura/imagen con Vision IA (Gemini Vision / OpenAI Vision / Ollama Vision) o Jina Visual Reader.
+ */
+export async function skillInspectVisualMediaOcr(params: {
+  mediaUrls: string[]
+  caption: string
+}): Promise<{
+  extractedVisualText: string
+  discoveredRepos: NavigatorDiscoveredRepo[]
+}> {
+  const imageCandidates = params.mediaUrls
+    .filter(u => /^https?:\/\//i.test(u) && !/\.(?:mp4|webm|mov)(?:\?|$)/i.test(u))
+    .slice(0, 2)
+
+  if (imageCandidates.length === 0) {
+    return { extractedVisualText: '', discoveredRepos: [] }
+  }
+
+  const discoveredRepos: NavigatorDiscoveredRepo[] = []
+  const visualChunks: string[] = []
+
+  const INVALID_OCR_OWNERS = new Set([
+    'owner',
+    'user',
+    'username',
+    'org',
+    'files',
+    'directories',
+    'skills',
+    'src',
+    'app',
+    'lib',
+    'bin',
+    'usr',
+    'etc',
+    'var',
+    'opt',
+    'home',
+    'github.com',
+    'huggingface.co',
+    'claude.ai',
+    'x.com',
+    'twitter.com'
+  ])
+
+  const addVisualRepo = (raw: string, via: string) => {
+    const candidate = raw.startsWith('http') ? raw : `https://github.com/${raw}`
+    const parsed = classifyGitHubUrl(candidate)
+    if (
+      parsed &&
+      parsed.kind === 'github_repo' &&
+      parsed.fullName &&
+      parsed.owner &&
+      parsed.repo &&
+      !INVALID_OCR_OWNERS.has(parsed.owner.toLowerCase()) &&
+      !INVALID_OCR_OWNERS.has(parsed.repo.toLowerCase()) &&
+      !parsed.owner.includes('.')
+    ) {
+      if (!discoveredRepos.some(d => d.fullName.toLowerCase() === parsed.fullName!.toLowerCase())) {
+        discoveredRepos.push({
+          fullName: parsed.fullName,
+          url: parsed.canonicalUrl,
+          description: `Detectado visualmente dentro de la captura/video (${via})`,
+          discoveryMethod: 'ai_web_grounding',
+          confidence: 'probable'
+        })
+      }
+    }
+  }
+
+  const imgUrl = imageCandidates[0]
+
+  // A. Si hay GEMINI_API_KEY, usar Gemini 2.5 Flash Multimodal Vision sobre la imagen/miniatura del video
+  const geminiKey = process.env.GEMINI_API_KEY?.trim()
+  if (geminiKey) {
+    try {
+      const imgRes = await fetch(imgUrl, { signal: AbortSignal.timeout(4000) })
+      if (imgRes.ok) {
+        const mimeType = imgRes.headers.get('content-type') || 'image/jpeg'
+        const buf = Buffer.from(await imgRes.arrayBuffer())
+        if (buf.byteLength > 0 && buf.byteLength < 4_000_000) {
+          const gRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(
+              geminiKey
+            )}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    parts: [
+                      {
+                        inlineData: {
+                          mimeType,
+                          data: buf.toString('base64')
+                        }
+                      },
+                      {
+                        text: 'Lee esta captura o frame de video. Devuelve SOLO JSON válido con {"githubUrl": "https://github.com/autor/repo si aparece explícito o vacío", "visibleToolOrText": "nombre de la herramienta o comando visible"}. No inventes ni uses placeholders.'
+                      }
+                    ]
+                  }
+                ],
+                generationConfig: { temperature: 0.1, maxOutputTokens: 200 }
+              }),
+              signal: AbortSignal.timeout(6500)
+            }
+          )
+          if (gRes.ok) {
+            const gData = await gRes.json()
+            const textOut = String(gData?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim()
+            if (textOut) {
+              const jMatch = textOut.match(/\{[\s\S]*\}/)
+              if (jMatch) {
+                try {
+                  const parsedJson = JSON.parse(jMatch[0])
+                  if (parsedJson.visibleToolOrText) {
+                    visualChunks.push(String(parsedJson.visibleToolOrText).trim())
+                  }
+                  if (parsedJson.githubUrl && String(parsedJson.githubUrl).includes('github.com/')) {
+                    addVisualRepo(String(parsedJson.githubUrl).trim(), 'Gemini Vision OCR')
+                  }
+                } catch {}
+              } else {
+                for (const m of textOut.matchAll(/https?:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/gi)) {
+                  addVisualRepo(m[0], 'Gemini Vision OCR')
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // B. Si hay OPENAI_API_KEY y aún no se extrajo texto visual, usar gpt-4o-mini Vision
+  const openAiKey = process.env.OPENAI_API_KEY?.trim()
+  if (openAiKey && visualChunks.length === 0) {
+    try {
+      const oRes = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openAiKey}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          temperature: 0.1,
+          max_tokens: 180,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Extract any GitHub owner/repo, URL, CLI command or software tool name visible in this image.'
+                },
+                {
+                  type: 'image_url',
+                  image_url: { url: imgUrl }
+                }
+              ]
+            }
+          ]
+        }),
+        signal: AbortSignal.timeout(6500)
+      })
+      if (oRes.ok) {
+        const oData = await oRes.json()
+        const textOut = String(oData?.choices?.[0]?.message?.content || '').trim()
+        if (textOut) {
+          visualChunks.push(textOut)
+          for (const m of textOut.matchAll(/\b([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\b/g)) {
+            addVisualRepo(m[1], 'OpenAI Vision OCR')
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return {
+    extractedVisualText: visualChunks.join(' | '),
     discoveredRepos
   }
 }
@@ -717,15 +1062,22 @@ ${combined.slice(0, 2500)}
         const jsonMatch = rawText.match(/\{[\s\S]*\}/)
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0])
-          if (parsed.githubFullName && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(parsed.githubFullName.trim())) {
+          if (
+            parsed.githubFullName &&
+            /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(parsed.githubFullName.trim()) &&
+            !/^owner\/repo$/i.test(parsed.githubFullName.trim())
+          ) {
             const fn = parsed.githubFullName.trim()
-            discoveredRepos.push({
-              fullName: fn,
-              url: `https://github.com/${fn}`,
-              description: parsed.explanationEs || `Identificado por Agente Gemini con navegación web (${fn}).`,
-              discoveryMethod: 'ai_web_grounding',
-              confidence: 'probable'
-            })
+            const ghCheck = classifyGitHubUrl(`https://github.com/${fn}`)
+            if (ghCheck && ghCheck.kind === 'github_repo' && ghCheck.fullName && !ghCheck.owner?.includes('.')) {
+              discoveredRepos.push({
+                fullName: ghCheck.fullName,
+                url: ghCheck.canonicalUrl,
+                description: parsed.explanationEs || `Identificado por Agente Gemini con navegación web (${ghCheck.fullName}).`,
+                discoveryMethod: 'ai_web_grounding',
+                confidence: 'probable'
+              })
+            }
           }
           if (parsed.searchQuery && typeof parsed.searchQuery === 'string') {
             candidateQueries.unshift(parsed.searchQuery.trim())
@@ -987,7 +1339,9 @@ export async function runWebNavigatorAgentForBookmark(
     outgoingLinks: bm.outgoingLinks,
     mediaType: bm.mediaType,
     mediaUrls: bm.mediaUrls,
-    topics: bm.topics
+    topics: bm.topics,
+    resourceType: bm.resourceType,
+    manualFields: bm.manualFields
   })
 
   if (offTopicInfo.isOffTopic) {
@@ -1005,6 +1359,7 @@ export async function runWebNavigatorAgentForBookmark(
   let hydratedAuthorName = bm.authorName
   let hydratedAuthorHandle = bm.authorHandle
   const allLinks = new Set<string>(bm.outgoingLinks || [])
+  const mediaThumbnails = new Set<string>(bm.mediaUrls || [])
   const discoveredRepos: NavigatorDiscoveredRepo[] = []
 
   const addDiscovered = (repo: NavigatorDiscoveredRepo) => {
@@ -1024,7 +1379,7 @@ export async function runWebNavigatorAgentForBookmark(
   })
   for (const r of fastAiRes.discoveredRepos) addDiscovered(r)
 
-  // Paso 2: Skill 1 — Inspeccionar Hilo, Comentarios/Respuestas de X, Citas y Bio del Autor (si aún no hay repo o el texto es corto/WhatsApp)
+  // Paso 2: Skill 1 — Inspeccionar Hilo, Comentarios/Respuestas de X, Sindicación, Citas, Perfil GitHub del Autor y Videos Originales
   const inlineXUrls =
     currentCaption.match(
       /https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\/[A-Za-z0-9_]+\/status\/\d+(?:\/video\/\d+)?/gi
@@ -1066,7 +1421,21 @@ export async function runWebNavigatorAgentForBookmark(
       hydratedAuthorHandle = socialRes.authorHandle
     }
     for (const u of socialRes.expandedUrls) allLinks.add(u)
+    for (const t of socialRes.discoveredMediaThumbnails) mediaThumbnails.add(t)
     for (const r of socialRes.discoveredRepos) addDiscovered(r)
+  }
+
+  // Paso 2.5 (Punto 2): Si aún no hay repositorio y hay imágenes/miniaturas de video, ejecutar OCR Visual Multimodal
+  if (discoveredRepos.length === 0 && mediaThumbnails.size > 0) {
+    skillsExecuted.push('skillInspectVisualMediaOcr')
+    const visualRes = await skillInspectVisualMediaOcr({
+      mediaUrls: Array.from(mediaThumbnails),
+      caption: currentCaption
+    })
+    if (visualRes.extractedVisualText) {
+      currentCaption = `${currentCaption}\n\n[OCR Visual]: ${visualRes.extractedVisualText}`.trim()
+    }
+    for (const r of visualRes.discoveredRepos) addDiscovered(r)
   }
 
   // Paso 3: Skill 2 — Navegar páginas intermedias (Substack, blogs, landing pages, artículos)

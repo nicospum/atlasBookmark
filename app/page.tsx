@@ -18,6 +18,7 @@ import { ExportView } from '@/components/views/export-view'
 import { CaptureView } from '@/components/views/capture-view'
 import { ReposSkillsExcelTable } from '@/components/repos-skills-excel-table'
 import { BookmarkItem, ImportHistoryEntry, StorageDiagnostics } from '@/lib/types'
+import { applyDurableClientStateToBookmarks } from '@/lib/client-persistence'
 
 export default function AtlasApp() {
   const [active, setActive] = useState('Resumen')
@@ -44,10 +45,11 @@ export default function AtlasApp() {
       const data = await res.json().catch(() => null)
       if (res.ok && data) {
         if (data.success && Array.isArray(data.items)) {
-          setBookmarks(data.items)
+          const mergedItems = applyDurableClientStateToBookmarks(data.items)
+          setBookmarks(mergedItems)
           setSelectedDetailItem(prev => {
             if (!prev) return null
-            return data.items.find((b: BookmarkItem) => b.id === prev.id) || prev
+            return mergedItems.find((b: BookmarkItem) => b.id === prev.id) || prev
           })
           // Guardar snapshot de seguridad en el navegador por si el entorno en nube es efímero
           if (typeof window !== 'undefined' && data.items.length > 0) {

@@ -853,7 +853,7 @@ async function fetchGitHubRepositoryViaPublicHtmlFallback(
     forks,
     openIssues: 0,
     primaryLanguage,
-    languages: primaryLanguage ? [{ name: primaryLanguage, percentage: 100, color: '#6366f1' }] : [],
+    languages: primaryLanguage ? [{ name: primaryLanguage, bytes: 100, percentage: 100 }] : [],
     topics,
     license: null,
     createdAt: now,

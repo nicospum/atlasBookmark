@@ -55,6 +55,7 @@ import {
   downloadRepositoriesCsvFile
 } from '@/lib/excel-export'
 import { ReposSkillsExcelTable } from '@/components/repos-skills-excel-table'
+import { installSkillOrRepoUniversal } from '@/lib/client-persistence'
 import type {
   ActivityFilterType,
   AiProviderId,
@@ -1657,25 +1658,26 @@ export function ReposView({
     }
   }
 
-  // #7: Instalar Skill o registrar Servidor MCP en 1 clic en la PC local
+  // #7: Instalar Skill o registrar Servidor MCP en 1 clic en la PC local (Universal: Local + Puente Vercel->Localhost + Descarga Portátil)
   const handleInstallRepoLocal = async (
     repo: GalleryRepository,
     installMode: 'skill_clone' | 'mcp_config' | 'repo_clone'
   ) => {
     setIsInstallingLocal(true)
     try {
-      const res = await fetch('/api/github/install-local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          installMode,
-          fullName: repo.fullName,
-          repository: repo,
-          token: githubToken.trim() || undefined
-        })
+      const uniRes = await installSkillOrRepoUniversal({
+        fullName: repo.fullName,
+        installMode,
+        repository: repo
       })
-      const data = await res.json()
-      const installRes: LocalInstallResult = data.result || data
+      const installRes: LocalInstallResult = {
+        success: uniRes.success,
+        fullName: repo.fullName,
+        installMode,
+        targetPath: uniRes.installedOnLocalDisk ? 'skills-installed/' : 'Descargas (PC)',
+        messageEs: uniRes.messageEs,
+        commandExecuted: `git clone --depth 1 https://github.com/${repo.fullName}.git`
+      }
       setLocalInstallResultByRepo(prev => ({
         ...prev,
         [repo.fullName.toLowerCase()]: installRes
@@ -1683,7 +1685,7 @@ export function ReposView({
       if (installRes.success) {
         setStatusBanner({
           type: 'ok',
-          text: `⚡ ${installRes.messageEs} (${installRes.targetPath})`
+          text: `⚡ ${installRes.messageEs}`
         })
       }
     } catch (err: any) {

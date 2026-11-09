@@ -3,10 +3,33 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import { execFileSync } from 'child_process'
+import { DATA_DIR } from '@/lib/db'
 import { getGalleryRepositoryByFullName } from '@/lib/bookmarks-repository'
 import { extractInstallAndSetupSnippets } from '@/lib/github-gallery'
 import { auditRepositorySecurityAndHealth } from '@/lib/repo-security-scanner'
 import type { GalleryRepository, LocalInstallResult } from '@/lib/types'
+
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, x-github-token'
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS })
+}
+
+function resolveWritableInstallBaseDir(): { baseDir: string; isCloudEphemeral: boolean } {
+  const cwd = process.cwd()
+  try {
+    const probe = path.join(cwd, `.install_probe_${process.pid}`)
+    fs.writeFileSync(probe, 'ok', 'utf-8')
+    fs.rmSync(probe, { force: true })
+    return { baseDir: cwd, isCloudEphemeral: false }
+  } catch {
+    return { baseDir: DATA_DIR, isCloudEphemeral: true }
+  }
+}
 
 const SAFE_SEGMENT_REGEX = /^[a-zA-Z0-9_.-]+$/
 
@@ -56,9 +79,9 @@ function buildFallbackGalleryRepo(
 
 export async function GET() {
   try {
-    const cwd = process.cwd()
-    const skillsDir = path.join(cwd, 'skills-installed')
-    const mcpConfigPath = path.join(cwd, 'data', 'mcp_servers_atlas.json')
+    const { baseDir, isCloudEphemeral } = resolveWritableInstallBaseDir()
+    const skillsDir = path.join(baseDir, 'skills-installed')
+    const mcpConfigPath = path.join(DATA_DIR, 'mcp_servers_atlas.json')
 
     const installedSkills: string[] = []
     if (fs.existsSync(skillsDir)) {
@@ -77,18 +100,22 @@ export async function GET() {
       }
     }
 
-    return NextResponse.json({
-      success: true,
-      hostPlatform: os.platform(),
-      skillsInstalledDir: skillsDir,
-      installedSkills,
-      mcpConfigPath,
-      mcpConfig
-    })
+    return NextResponse.json(
+      {
+        success: true,
+        hostPlatform: os.platform(),
+        isCloudEphemeral,
+        skillsInstalledDir: skillsDir,
+        installedSkills,
+        mcpConfigPath,
+        mcpConfig
+      },
+      { headers: CORS_HEADERS }
+    )
   } catch (error: any) {
     return NextResponse.json(
       { success: false, error: error?.message || 'Error al consultar instalaciones locales.' },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     )
   }
 }
@@ -130,18 +157,22 @@ export async function POST(request: Request) {
     // MODE 3: Security & Health Audit ('audit')
     if (installMode === 'audit') {
       const audit = await auditRepositorySecurityAndHealth(repoObj, { token })
-      return NextResponse.json({
-        success: true,
-        fullName,
-        audit
-      })
+      return NextResponse.json(
+        {
+          success: true,
+          fullName,
+          audit
+        },
+        { headers: CORS_HEADERS }
+      )
     }
+
+    const { baseDir, isCloudEphemeral } = resolveWritableInstallBaseDir()
 
     // MODE 2: 1-Click MCP Server Local Config ('mcp_config')
     if (installMode === 'mcp_config') {
-      const dataDir = path.join(process.cwd(), 'data')
-      const mcpConfigPath = path.join(dataDir, 'mcp_servers_atlas.json')
-      fs.mkdirSync(dataDir, { recursive: true })
+      const mcpConfigPath = path.join(DATA_DIR, 'mcp_servers_atlas.json')
+      fs.mkdirSync(DATA_DIR, { recursive: true })
 
       let existingConfig: { mcpServers: Record<string, any> } = { mcpServers: {} }
       if (fs.existsSync(mcpConfigPath)) {
@@ -201,15 +232,23 @@ export async function POST(request: Request) {
         commandExecuted: snippet.primaryCommand
       }
 
-      return NextResponse.json({
-        ...result,
-        result,
-        mcpConfig: existingConfig
-      })
+      return NextResponse.json(
+        {
+          ...result,
+          result,
+          isCloudEphemeral,
+          mcpConfig: existingConfig,
+          portableBundle: {
+            fileName: 'mcp_servers_atlas.json',
+            content: JSON.stringify(existingConfig, null, 2)
+          }
+        },
+        { headers: CORS_HEADERS }
+      )
     }
 
     // MODE 1: 1-Click Local Skill / Repo Clone ('skill_clone' | 'repo_clone')
-    const baseSkillsDir = path.join(process.cwd(), 'skills-installed')
+    const baseSkillsDir = path.join(baseDir, 'skills-installed')
     const targetPath = path.join(baseSkillsDir, repoName)
 
     // Strict containment check inside skills-installed
@@ -219,7 +258,7 @@ export async function POST(request: Request) {
           success: false,
           error: 'Directorio de destino fuera del espacio de trabajo permitido.'
         },
-        { status: 400 }
+        { status: 400, headers: CORS_HEADERS }
       )
     }
 
@@ -230,32 +269,33 @@ export async function POST(request: Request) {
     let clonedWithGit = false
     let gitDetailMessage = ''
 
-    try {
-      if (fs.existsSync(path.join(targetPath, '.git'))) {
-        execFileSync('git', ['-C', targetPath, 'pull', '--ff-only'], {
-          timeout: 20000,
-          stdio: 'pipe'
-        })
-        clonedWithGit = true
-        gitDetailMessage = `Repositorio actualizado (git pull) en ${targetPath}.`
-      } else {
-        if (fs.existsSync(targetPath) && fs.readdirSync(targetPath).length > 0) {
-          // Directory exists without .git; keep existing files and refresh manifest/docs fallback
-          clonedWithGit = false
-        } else {
-          execFileSync('git', ['clone', '--depth', '1', cloneUrl, targetPath], {
-            timeout: 25000,
+    if (!isCloudEphemeral) {
+      try {
+        if (fs.existsSync(path.join(targetPath, '.git'))) {
+          execFileSync('git', ['-C', targetPath, 'pull', '--ff-only'], {
+            timeout: 20000,
             stdio: 'pipe'
           })
           clonedWithGit = true
-          gitDetailMessage = `Skill / Repositorio clonado exitosamente con git en ${targetPath}.`
+          gitDetailMessage = `Repositorio actualizado (git pull) en ${targetPath}.`
+        } else {
+          if (fs.existsSync(targetPath) && fs.readdirSync(targetPath).length > 0) {
+            clonedWithGit = false
+          } else {
+            execFileSync('git', ['clone', '--depth', '1', cloneUrl, targetPath], {
+              timeout: 25000,
+              stdio: 'pipe'
+            })
+            clonedWithGit = true
+            gitDetailMessage = `Skill / Repositorio clonado exitosamente con git en ${targetPath}.`
+          }
         }
+      } catch {
+        clonedWithGit = false
       }
-    } catch {
-      clonedWithGit = false
     }
 
-    // Fallback if git fails, is offline, or target already had non-git files: download SKILL.md / README.md directly
+    // Fallback if git fails, is offline, or running in serverless cloud: download SKILL.md / README.md directly
     if (!clonedWithGit) {
       fs.mkdirSync(targetPath, { recursive: true })
       const branch = repoObj.defaultBranch || 'main'
@@ -311,8 +351,16 @@ export async function POST(request: Request) {
         downloadedFiles.push('SKILL.md')
       }
 
-      gitDetailMessage = `Skill instalada localmente en ${targetPath} (${downloadedFiles.join(', ')} listos para tu agente).`
+      gitDetailMessage = `Skill instalada en ${targetPath} (${downloadedFiles.join(', ')} listos para tu agente).`
     }
+
+    let skillMdContent = ''
+    try {
+      const skillMdPath = path.join(targetPath, 'SKILL.md')
+      if (fs.existsSync(skillMdPath)) {
+        skillMdContent = fs.readFileSync(skillMdPath, 'utf-8')
+      }
+    } catch {}
 
     const normalizedMode: LocalInstallResult['installMode'] =
       installMode === 'repo_clone' ? 'repo_clone' : 'skill_clone'
@@ -326,17 +374,27 @@ export async function POST(request: Request) {
       commandExecuted
     }
 
-    return NextResponse.json({
-      ...result,
-      result
-    })
+    return NextResponse.json(
+      {
+        ...result,
+        result,
+        isCloudEphemeral,
+        portableBundle: {
+          folderName: repoName,
+          fileName: 'SKILL.md',
+          content: skillMdContent,
+          windowsCommand: `git clone --depth 1 https://github.com/${owner}/${repoName}.git "$HOME/.gemini/skills/${repoName}"`
+        }
+      },
+      { headers: CORS_HEADERS }
+    )
   } catch (error: any) {
     return NextResponse.json(
       {
         success: false,
         error: error?.message || 'No se pudo completar la instalación o auditoría local.'
       },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     )
   }
 }
