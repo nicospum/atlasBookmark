@@ -437,6 +437,7 @@ export interface ConfiguredApiKeys {
   openai?: string
   githubToken?: string
   hermesToken?: string
+  telegramBotToken?: string
 }
 
 export interface AtlasCustomizationConfig {

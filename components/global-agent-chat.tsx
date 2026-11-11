@@ -577,6 +577,47 @@ export function GlobalAgentChat({
                 className="flex-1 rounded border border-border bg-[#0f1118] px-2 py-1 text-xs text-white"
               />
             </div>
+            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
+              <span className="w-24 text-[11px] text-emerald-300 font-medium">Telegram Bot:</span>
+              <input
+                type="password"
+                value={apiKeys.telegramBotToken || ''}
+                onChange={e => handleSaveKeys({ ...apiKeys, telegramBotToken: e.target.value })}
+                placeholder="123456:ABC-DEF... (BotFather Token)"
+                className="flex-1 rounded border border-border bg-[#0f1118] px-2 py-1 text-xs text-white"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!apiKeys.telegramBotToken) return
+                  const res = await fetch('/api/agent/telegram', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      action: 'register-webhook',
+                      botToken: apiKeys.telegramBotToken
+                    })
+                  })
+                  const data = await res.json()
+                  setTurns(prev => [
+                    ...prev,
+                    {
+                      id: `tg-${Date.now()}`,
+                      role: 'assistant',
+                      agentId: 'hermes',
+                      providerLabel: 'Hermes · Puente Telegram',
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                      content: data.success
+                        ? `✅ **Webhook de Telegram conectado a Hermes:** \`${data.webhookUrl}\`. Ya podés hablarle a tu bot en Telegram y ejecutará las 14 herramientas de Atlas.`
+                        : `⚠️ No se pudo registrar el Webhook en Telegram: ${JSON.stringify(data.telegramResponse || data.error)}`
+                    }
+                  ])
+                }}
+                className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-medium text-emerald-300 hover:bg-emerald-500/25"
+              >
+                Vincular
+              </button>
+            </div>
           </div>
         </div>
       )}
