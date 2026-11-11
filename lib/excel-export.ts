@@ -561,6 +561,9 @@ function attachRepoColumnWidthsAndFilter(ws: XLSX.WorkSheet, rowCount: number) {
 export const SKILL_MASTER_EXCEL_COLUMNS = [
   'Skill',
   'Tipo de Skill / Capacidad',
+  '¿Es Open Source? / Licencia',
+  '¿Necesita Login?',
+  '¿Hay que pagar? / Costo',
   'Qué hace (Español)',
   'Qué tipo de cosas puede hacer',
   'Repositorio al que pertenece',
@@ -583,6 +586,9 @@ export function mapSkillToExcelRow(skill: ExtractedRepoSkill): Record<string, st
   return {
     Skill: sanitizeFormulaCell(skill.skillName),
     'Tipo de Skill / Capacidad': sanitizeFormulaCell(skill.skillKind),
+    '¿Es Open Source? / Licencia': sanitizeFormulaCell(skill.openSourceLabel || 'Sí · Open Source (GitHub)'),
+    '¿Necesita Login?': sanitizeFormulaCell(skill.requiresLogin || 'No (100% Local)'),
+    '¿Hay que pagar? / Costo': sanitizeFormulaCell(skill.pricingModel || '100% Gratis (Open Source)'),
     'Qué hace (Español)': sanitizeFormulaCell(skill.whatItDoesEs),
     'Qué tipo de cosas puede hacer': sanitizeFormulaCell(skill.capabilitiesEs),
     'Repositorio al que pertenece': sanitizeFormulaCell(skill.repoFullName),
@@ -606,6 +612,9 @@ function attachSkillColumnWidthsAndFilter(ws: XLSX.WorkSheet, rowCount: number) 
   ws['!cols'] = [
     { wch: 28 }, // Skill
     { wch: 26 }, // Tipo de Skill
+    { wch: 24 }, // Open Source / Licencia
+    { wch: 24 }, // Necesita Login
+    { wch: 28 }, // Hay que pagar / Costo
     { wch: 54 }, // Qué hace
     { wch: 46 }, // Qué tipo de cosas puede hacer
     { wch: 30 }, // Repositorio

@@ -457,7 +457,7 @@ export default function AtlasApp() {
           {/* Menú desplegable Mobile */}
           {mobileMenuOpen && (
             <div className="mb-6 flex flex-col gap-1 rounded-lg border border-border bg-[#16181f] p-3 lg:hidden">
-              {['Resumen', 'Biblioteca', 'Repositorios', 'Temas', 'Fuentes', 'Exportar', 'Captura', 'TablaReposSkills'].map(name => (
+              {['Resumen', 'Biblioteca', 'Repositorios', 'CatalogoExtraido', 'Temas', 'Fuentes', 'Exportar', 'Captura', 'TablaReposSkills'].map(name => (
                 <button
                   key={name}
                   onClick={() => {
@@ -468,7 +468,11 @@ export default function AtlasApp() {
                     active === name ? 'bg-[#28263b] text-[#bfb8ff]' : 'text-muted-foreground'
                   }`}
                 >
-                  {name === 'TablaReposSkills' ? 'Tabla Repos & Skills' : name}
+                  {name === 'CatalogoExtraido'
+                    ? 'Skills, MCPs & Apps (Adentro de Repos)'
+                    : name === 'TablaReposSkills'
+                    ? 'Tabla Repos & Skills'
+                    : name}
                 </button>
               ))}
             </div>
@@ -620,6 +624,18 @@ export default function AtlasApp() {
               onRefreshBookmarks={refreshBookmarks}
               initialSelectedRepoFullName={selectedRepoFullName}
               onClearInitialSelectedRepo={() => setSelectedRepoFullName(null)}
+            />
+          )}
+
+          {active === 'CatalogoExtraido' && (
+            <ReposSkillsExcelTable
+              key="catalogo-extraido-skills-mcps-apps"
+              bookmarks={bookmarks}
+              onSelectRepoDetail={handleOpenRepoInGallery}
+              onRefreshBookmarks={refreshBookmarks}
+              defaultSheet="skills"
+              title="Catálogo Extraído: Todas las Skills, Servidores MCP, Subagentes y Aplicaciones Adentro de tus Repositorios"
+              subtitle="Repositorio maestro de lo que hay adentro de tus 298 repositorios guardados: incluye si es Open Source y qué licencia tiene, si necesita Login, si hay que pagar o es 100% gratis, qué hace y sus características, área, empresa creadora, grado de seguridad, puntaje de importancia (1-10) e instalación en 1 clic."
             />
           )}
 

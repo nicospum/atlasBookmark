@@ -12,6 +12,7 @@ export const ALL_APP_SECTIONS = [
   'Resumen',
   'Biblioteca',
   'Repositorios',
+  'CatalogoExtraido',
   'Temas',
   'Fuentes',
   'Exportar',
@@ -163,7 +164,7 @@ export function loadCustomizationConfig(): AtlasCustomizationConfig {
       },
       visibleSections:
         Array.isArray(parsed.visibleSections) && parsed.visibleSections.length > 0
-          ? parsed.visibleSections
+          ? Array.from(new Set([...parsed.visibleSections, 'CatalogoExtraido']))
           : DEFAULT_CUSTOMIZATION_CONFIG.visibleSections,
       visibleLibraryColumns:
         Array.isArray(parsed.visibleLibraryColumns) && parsed.visibleLibraryColumns.length > 0

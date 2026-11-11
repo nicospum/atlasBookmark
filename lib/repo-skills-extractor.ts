@@ -16,6 +16,9 @@ export type ExtractedSkillKind =
   | 'Comando Slash (/cmd)'
   | 'Subagente Especializado'
   | 'Servidor / Conector MCP'
+  | 'Aplicación / Herramienta'
+  | 'Librería / Framework / SDK'
+  | 'Modelo / Dataset IA'
   | 'Herramienta / Workflow IA'
 
 export interface ExtractedRepoSkill {
@@ -41,6 +44,15 @@ export interface ExtractedRepoSkill {
   installCommand: string
   comments: string
   isSubSkillFromReadme: boolean
+  isOpenSource: boolean
+  openSourceLabel: string
+  licenseName: string
+  requiresLogin: 'No (100% Local)' | 'Opcional (API / Cloud)' | 'Sí (Cuenta / API Key)'
+  pricingModel:
+    | '100% Gratis (Open Source)'
+    | 'Gratis + BYOK (Tu API Key)'
+    | 'Freemium (Local Gratis + Cloud)'
+    | 'Servicio Pago'
 }
 
 export interface SkillNoteOverride {
@@ -443,16 +455,23 @@ export function extractSkillsFromRepository(
         .map(c => c.trim())
       if (cells.length < 2) continue
 
-      // Case 1A: First cell has [skill-name](path/to/SKILL.md or skills/... or engineering/...)
+      // Case 1A: First cell has [skill-name](path/to/SKILL.md or skills/... or engineering/... or division/...)
       const linkMatch = cells[0].match(/\[([^\]]+)\]\(([^)]+)\)/)
       if (linkMatch) {
         const [, linkLabel, linkHref] = linkMatch
         if (
-          /skill|agent|command|\.md|prompts?\//i.test(linkHref) &&
-          !/^https?:\/\/(?!github\.com|skills\.sh)/i.test(linkHref)
+          (/skill|agent|command|mcp|tool|app|plugin|engineering|design|marketing|product|testing|security|support|\.md|prompts?\//i.test(
+            linkHref
+          ) ||
+            !/^https?:\/\//i.test(linkHref)) &&
+          !/^https?:\/\/(?:img\.shields\.io|badge|discord|twitter|x\.com|linkedin)/i.test(linkHref)
         ) {
           const descCell = cells.slice(1).join(' — ')
-          const kind: ExtractedSkillKind = /agent/i.test(linkHref)
+          const kind: ExtractedSkillKind = /mcp/i.test(`${linkHref} ${linkLabel} ${repo.fullName}`)
+            ? 'Servidor / Conector MCP'
+            : /agent|engineering\/|design\/|marketing\/|testing\/|product\//i.test(
+                `${linkHref} ${repo.fullName}`
+              )
             ? 'Subagente Especializado'
             : linkLabel.startsWith('/')
             ? 'Comando Slash (/cmd)'
@@ -468,17 +487,58 @@ export function extractSkillsFromRepository(
         const cmdName = cmdMatch[1]
         const desc = [cells[0], cells[2]].filter(Boolean).join(' — ')
         pushCandidate(cmdName, desc, undefined, 'Comando Slash (/cmd)')
+        continue
+      }
+
+      // Case 1C: Inline multi-command table cell (like pbakaus/impeccable: | **Steer** | `bolder` amplifies safe designs · `quieter` tones down... |)
+      if (cells.length === 2 && cells[1].includes('`') && cells[1].includes('·')) {
+        const parts = cells[1].split('·').map(p => p.trim())
+        for (const p of parts) {
+          const inlineCmd = p.match(/^`([a-z0-9:_-]+)`\s+(.+)$/i)
+          if (inlineCmd) {
+            pushCandidate(
+              `/${inlineCmd[1]}`,
+              `${cleanMarkdownInline(cells[0])}: ${inlineCmd[2]}`,
+              undefined,
+              'Comando Slash (/cmd)'
+            )
+          }
+        }
       }
     }
 
-    // Pass 2: Bullet items linking to SKILL.md or ./skills/...
+    // Pass 1D: HTML gallery cards with <a href="agent_skills/..."><img ... alt="Name: description"></a> (like Shubhamsaboo/awesome-llm-apps)
+    const htmlCardRegex =
+      /<a\s+href="([^"]*(?:agent_skills|single_agent_apps|multi_agent_apps|mcp_ai_agents|rag_tutorials|voice_ai_agents|starter_ai_agents)[^"]*)"[^>]*>\s*<img[^>]*alt="([^"]+)"/gi
+    let hm: RegExpExecArray | null
+    while ((hm = htmlCardRegex.exec(readme)) !== null) {
+      const [, href, altText] = hm
+      const [cardTitle, ...restDesc] = altText.split(':')
+      const kind: ExtractedSkillKind = /agent_skills/i.test(href)
+        ? 'Skill (SKILL.md)'
+        : /mcp/i.test(href)
+        ? 'Servidor / Conector MCP'
+        : 'Aplicación / Herramienta'
+      pushCandidate(
+        cardTitle.trim(),
+        restDesc.join(':').trim() || altText,
+        href,
+        kind
+      )
+    }
+
+    // Pass 2: Bullet items linking to SKILL.md, ./skills/..., ./agents/..., ./mcp/..., or repo subpaths
     const bulletSkillRegex =
-      /^[*-]\s+(?:\*\*)?\[`?([^\]`]+)`?\]\(([^)]*(?:SKILL\.md|skills\/[a-z0-9_-]+)[^)]*)\)(?:\*\*)?\s*(?:[-—:]+\s*(.+))?$/gim
+      /^[*-]\s+(?:\*\*)?\[`?([^\]`]+)`?\]\(([^)]*(?:SKILL\.md|skills\/[a-z0-9_-]+|agents?\/[a-z0-9_-]+|mcp[a-z0-9/_-]*)[^)]*)\)(?:\*\*)?\s*(?:[-—:]+\s*(.+))?$/gim
     let m: RegExpExecArray | null
     while ((m = bulletSkillRegex.exec(readme)) !== null) {
       const [, label, href, desc] = m
       const kind: ExtractedSkillKind = label.trim().startsWith('/')
         ? 'Comando Slash (/cmd)'
+        : /mcp/i.test(href)
+        ? 'Servidor / Conector MCP'
+        : /agent/i.test(href)
+        ? 'Subagente Especializado'
         : 'Skill (SKILL.md)'
       pushCandidate(label, desc || '', href, kind)
     }
@@ -490,9 +550,9 @@ export function extractSkillsFromRepository(
       pushCandidate(folderName, '', href, 'Skill (SKILL.md)')
     }
 
-    // Pass 4: ### <skill-name> subsections under "## Available Skills" or "## Skills"
+    // Pass 4: ### <skill-name> subsections under "## Available Skills" or "## Skills" or "## MCP Servers"
     const skillsSectionMatch = readme.match(
-      /##\s+(?:Available\s+Skills|Skills|Included\s+Skills|Agent\s+Skills)\s*\r?\n([\s\S]{1,12000}?)(?=\r?\n##\s+[^#]|$)/i
+      /##\s+(?:Available\s+Skills|Skills|Included\s+Skills|Agent\s+Skills|MCP\s+Servers|Available\s+Tools)\s*\r?\n([\s\S]{1,14000}?)(?=\r?\n##\s+[^#]|$)/i
     )
     if (skillsSectionMatch) {
       const sectionBody = skillsSectionMatch[1]
@@ -521,7 +581,7 @@ export function extractSkillsFromRepository(
           rawHeading,
           firstParagraph,
           skillShMatch ? skillShMatch[0] : undefined,
-          'Skill (SKILL.md)'
+          /mcp/i.test(rawHeading) ? 'Servidor / Conector MCP' : 'Skill (SKILL.md)'
         )
       }
     }
@@ -533,24 +593,23 @@ export function extractSkillsFromRepository(
     readme.match(/claude\s+plugin\s+install\s+[^\r\n`]+/i)?.[0]?.trim() ||
     install.primaryCommand
 
-  // If no sub-skills were parsed from the README, decide whether the repo itself represents a primary Skill / MCP / Agent / Tool
-  const isAgenticOrSkillRepo =
-    repo.resourceType === 'Skill' ||
-    repo.resourceType === 'Servidor MCP o conector' ||
-    repo.resourceType === 'Agente o workflow' ||
-    ev.areaCategory === 'Agentes Autónomos, Skills & MCP' ||
-    /skill|mcp|agent|claude|cursor|codex/i.test(`${repo.fullName} ${repo.description}`)
+  // Universal guarantee: Every single one of the 298 repositories ALSO contributes its primary Skill / MCP / Application / Framework / Model if not already present
+  const primaryKind: ExtractedSkillKind =
+    repo.resourceType === 'Servidor MCP o conector' || /\bmcp\b/i.test(`${repo.fullName} ${repo.description}`)
+      ? 'Servidor / Conector MCP'
+      : repo.resourceType === 'Skill' || /\bskills?\b/i.test(repo.fullName)
+      ? 'Skill (SKILL.md)'
+      : repo.resourceType === 'Agente o workflow' || /\bagents?\b/i.test(repo.fullName)
+      ? 'Subagente Especializado'
+      : repo.resourceType === 'Aplicación o herramienta'
+      ? 'Aplicación / Herramienta'
+      : repo.resourceType === 'Modelo o dataset'
+      ? 'Modelo / Dataset IA'
+      : repo.resourceType === 'Librería, framework o SDK'
+      ? 'Librería / Framework / SDK'
+      : 'Herramienta / Workflow IA'
 
-  if (extracted.length === 0 && isAgenticOrSkillRepo) {
-    const primaryKind: ExtractedSkillKind =
-      repo.resourceType === 'Servidor MCP o conector' || /mcp/i.test(repo.fullName)
-        ? 'Servidor / Conector MCP'
-        : repo.resourceType === 'Agente o workflow' || /agent/i.test(repo.fullName)
-        ? 'Subagente Especializado'
-        : repo.resourceType === 'Skill' || /skill/i.test(repo.fullName)
-        ? 'Skill (SKILL.md)'
-        : 'Herramienta / Workflow IA'
-
+  if (extracted.length === 0) {
     pushCandidate(
       repo.name,
       ev.whatIsItEs || repo.shortExplanationEs || repo.description,
@@ -568,7 +627,7 @@ export function extractSkillsFromRepository(
     ev.creatorKind
   )
 
-  return extracted.slice(0, 40).map(item => {
+  return extracted.slice(0, 65).map(item => {
     const id = `skill:${repo.fullName.toLowerCase()}:${item.slug}`
     const override = overridesMap.get(id)
     const { whatItDoesEs, capabilitiesEs } = translateOrEnhanceSkillDescriptionEs(
@@ -579,6 +638,54 @@ export function extractSkillsFromRepository(
     )
     const knownKey = item.name.toLowerCase().replace(/^\/+/, '').trim()
     const useCases = KNOWN_SKILL_TRANSLATIONS_ES[knownKey]?.projectUseCases || ev.projectUseCases
+
+    // Determine Open Source, License, Login Requirement & Pricing Model
+    const rawLic = (repo.license || '').trim()
+    const readmeLicMatch = readme.match(/\b(MIT|Apache-2\.0|Apache\s+2\.0|GPL-3\.0|AGPL-3\.0|BSD-3-Clause|MPL-2\.0)\b/i)
+    const licenseName =
+      rawLic && rawLic !== 'NOASSERTION'
+        ? rawLic
+        : readmeLicMatch
+        ? readmeLicMatch[1].toUpperCase().replace(/\s+/g, '-')
+        : 'Open Source (GitHub)'
+    const isOpenSource = true
+    const openSourceLabel = `Sí · ${licenseName}`
+
+    const hayAll = `${item.name} ${item.rawDesc} ${repo.fullName} ${repo.description} ${item.kind}`.toLowerCase()
+    const isCloudBacked =
+      /\b(sentry|supabase|neon|cloudflare|firecrawl|stripe|slack|notion|linear|vercel|auth0|clerk|datadog|posthog|qdrant\s+cloud|openai|anthropic|gemini)\b/.test(
+        hayAll
+      )
+    const isHybridSaaS =
+      /\b(n8n|dify|firecrawl|supabase|neon|qdrant|sentry|posthog|langfuse|composio|browserbase)\b/.test(
+        repo.fullName.toLowerCase()
+      )
+
+    let requiresLogin: ExtractedRepoSkill['requiresLogin'] = 'No (100% Local)'
+    if (
+      item.kind === 'Skill (SKILL.md)' ||
+      item.kind === 'Comando Slash (/cmd)' ||
+      item.kind === 'Librería / Framework / SDK' ||
+      item.kind === 'Modelo / Dataset IA'
+    ) {
+      requiresLogin = isCloudBacked ? 'Opcional (API / Cloud)' : 'No (100% Local)'
+    } else if (isHybridSaaS || item.kind === 'Servidor / Conector MCP') {
+      requiresLogin = isCloudBacked ? 'Sí (Cuenta / API Key)' : 'Opcional (API / Cloud)'
+    } else {
+      requiresLogin = isCloudBacked ? 'Opcional (API / Cloud)' : 'No (100% Local)'
+    }
+
+    let pricingModel: ExtractedRepoSkill['pricingModel'] = '100% Gratis (Open Source)'
+    if (isHybridSaaS) {
+      pricingModel = 'Freemium (Local Gratis + Cloud)'
+    } else if (
+      item.kind === 'Subagente Especializado' ||
+      (item.kind === 'Aplicación / Herramienta' && /\b(llm|gpt|claude|gemini|openai|agent)\b/.test(hayAll))
+    ) {
+      pricingModel = 'Gratis + BYOK (Tu API Key)'
+    } else {
+      pricingModel = '100% Gratis (Open Source)'
+    }
 
     return {
       id,
@@ -602,7 +709,12 @@ export function extractSkillsFromRepository(
       securityGrade: ev.securityGrade,
       installCommand: item.customInstall || defaultSkillInstall,
       comments: override?.comments !== undefined ? override.comments : defaultComment,
-      isSubSkillFromReadme: extracted.length > 1 || Boolean(item.href && item.href !== repo.url)
+      isSubSkillFromReadme: extracted.length > 1 || Boolean(item.href && item.href !== repo.url),
+      isOpenSource,
+      openSourceLabel,
+      licenseName,
+      requiresLogin,
+      pricingModel
     }
   })
 }

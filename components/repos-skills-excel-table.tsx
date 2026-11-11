@@ -87,6 +87,9 @@ export function ReposSkillsExcelTable({
   const [areaFilter, setAreaFilter] = useState<string>('all')
   const [recFilter, setRecFilter] = useState<string>('all')
   const [skillKindFilter, setSkillKindFilter] = useState<string>('all')
+  const [pricingFilter, setPricingFilter] = useState<string>('all')
+  const [loginFilter, setLoginFilter] = useState<string>('all')
+  const [securityFilter, setSecurityFilter] = useState<string>('all')
   const [repoFilterForSkills, setRepoFilterForSkills] = useState<string>('all')
   const [onlySubSkills, setOnlySubSkills] = useState<boolean>(false)
   const [sortBy, setSortBy] = useState<'score' | 'stars' | 'name' | 'company'>('score')
@@ -160,7 +163,37 @@ export function ReposSkillsExcelTable({
   // Reset pagination when filters or sheet change
   useEffect(() => {
     setCurrentPage(1)
-  }, [activeSheet, searchQuery, areaFilter, recFilter, skillKindFilter, repoFilterForSkills, onlySubSkills, sortBy])
+  }, [activeSheet, searchQuery, areaFilter, recFilter, skillKindFilter, pricingFilter, loginFilter, securityFilter, repoFilterForSkills, onlySubSkills, sortBy])
+
+  // Summary counts for extracted catalog
+  const extractedSummaryStats = useMemo(() => {
+    let skillsMdCount = 0
+    let mcpCount = 0
+    let subagentsCount = 0
+    let slashCount = 0
+    let appsAndToolsCount = 0
+    let freeOpenSourceCount = 0
+    let noLoginCount = 0
+    for (const s of skills) {
+      if (s.skillKind === 'Skill (SKILL.md)') skillsMdCount++
+      else if (s.skillKind === 'Servidor / Conector MCP') mcpCount++
+      else if (s.skillKind === 'Subagente Especializado') subagentsCount++
+      else if (s.skillKind === 'Comando Slash (/cmd)') slashCount++
+      else appsAndToolsCount++
+      if (s.pricingModel === '100% Gratis (Open Source)') freeOpenSourceCount++
+      if (s.requiresLogin === 'No (100% Local)') noLoginCount++
+    }
+    return {
+      total: skills.length,
+      skillsMdCount,
+      mcpCount,
+      subagentsCount,
+      slashCount,
+      appsAndToolsCount,
+      freeOpenSourceCount,
+      noLoginCount
+    }
+  }, [skills])
 
   // Map repo fullName -> number of extracted skills inside it
   const skillsCountByRepo = useMemo(() => {
@@ -258,7 +291,29 @@ export function ReposSkillsExcelTable({
     return skills
       .filter(s => {
         if (areaFilter !== 'all' && s.areaCategory !== areaFilter) return false
-        if (skillKindFilter !== 'all' && s.skillKind !== skillKindFilter) return false
+        if (skillKindFilter !== 'all') {
+          if (skillKindFilter === 'apps_tools') {
+            if (
+              s.skillKind !== 'Aplicación / Herramienta' &&
+              s.skillKind !== 'Herramienta / Workflow IA' &&
+              s.skillKind !== 'Librería / Framework / SDK' &&
+              s.skillKind !== 'Modelo / Dataset IA'
+            ) {
+              return false
+            }
+          } else if (s.skillKind !== skillKindFilter) {
+            return false
+          }
+        }
+        if (pricingFilter !== 'all' && (s.pricingModel || '100% Gratis (Open Source)') !== pricingFilter) {
+          return false
+        }
+        if (loginFilter !== 'all' && (s.requiresLogin || 'No (100% Local)') !== loginFilter) {
+          return false
+        }
+        if (securityFilter !== 'all' && s.securityGrade !== securityFilter) {
+          return false
+        }
         if (
           repoFilterForSkills !== 'all' &&
           s.repoFullName.toLowerCase() !== repoFilterForSkills.toLowerCase()
@@ -279,7 +334,11 @@ export function ReposSkillsExcelTable({
           s.projectUseCases,
           s.comments || '',
           s.areaCategory,
-          s.skillKind
+          s.skillKind,
+          s.openSourceLabel || '',
+          s.licenseName || '',
+          s.requiresLogin || '',
+          s.pricingModel || ''
         ]
           .join(' ')
           .toLowerCase()
@@ -292,7 +351,7 @@ export function ReposSkillsExcelTable({
         if (b.atlasScore !== a.atlasScore) return b.atlasScore - a.atlasScore
         return (b.stars || 0) - (a.stars || 0)
       })
-  }, [skills, searchQuery, areaFilter, skillKindFilter, repoFilterForSkills, onlySubSkills, recFilter, sortBy])
+  }, [skills, searchQuery, areaFilter, skillKindFilter, pricingFilter, loginFilter, securityFilter, repoFilterForSkills, onlySubSkills, recFilter, sortBy])
 
   // Pestaña 3: Links Intermedios & Navegador IA ("El Link de ese Link" para posts técnicos sin GitHub directo)
   const referenceLinkBookmarks = useMemo(() => {
@@ -861,42 +920,130 @@ export function ReposSkillsExcelTable({
 
         {/* EXTRA FILTERS FOR SKILLS SHEET */}
         {activeSheet === 'skills' && (
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#232636] pt-2.5 text-xs">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-muted-foreground flex items-center gap-1">
-                <Filter className="size-3.5 text-emerald-400" /> Tipo de Skill:
-              </span>
-              {[
-                { id: 'all', label: 'Todos' },
-                { id: 'Skill (SKILL.md)', label: 'Skill (SKILL.md)' },
-                { id: 'Comando Slash (/cmd)', label: 'Comandos Slash (/cmd)' },
-                { id: 'Subagente Especializado', label: 'Subagentes' },
-                { id: 'Servidor / Conector MCP', label: 'Servidores MCP' }
-              ].map(t => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setSkillKindFilter(t.id)}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    skillKindFilter === t.id
-                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                      : 'bg-[#11131c] text-muted-foreground hover:text-foreground border border-transparent'
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
+          <div className="flex flex-col gap-2.5 border-t border-[#232636] pt-2.5 text-xs">
+            {/* KPI Summary Strip of Extracted Repository Contents */}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="rounded-lg border border-emerald-500/30 bg-emerald-950/20 px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-emerald-300/80">Total Extraídos</p>
+                <p className="mt-0.5 text-base font-bold text-emerald-300">
+                  {extractedSummaryStats.total.toLocaleString('es-ES')}
+                </p>
+                <p className="text-[10px] text-muted-foreground">De los {repos.length} repos guardados</p>
+              </div>
+              <div className="rounded-lg border border-[#2b2e40] bg-[#10131d] px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Skills & Comandos</p>
+                <p className="mt-0.5 text-base font-bold text-foreground">
+                  {(extractedSummaryStats.skillsMdCount + extractedSummaryStats.slashCount).toLocaleString('es-ES')}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  {extractedSummaryStats.skillsMdCount} SKILL.md · {extractedSummaryStats.slashCount} /cmd
+                </p>
+              </div>
+              <div className="rounded-lg border border-[#2b2e40] bg-[#10131d] px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Servidores MCP</p>
+                <p className="mt-0.5 text-base font-bold text-sky-300">
+                  {extractedSummaryStats.mcpCount.toLocaleString('es-ES')}
+                </p>
+                <p className="text-[10px] text-muted-foreground">Conectores & tools MCP</p>
+              </div>
+              <div className="rounded-lg border border-[#2b2e40] bg-[#10131d] px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Subagentes IA</p>
+                <p className="mt-0.5 text-base font-bold text-[#bfb8ff]">
+                  {extractedSummaryStats.subagentsCount.toLocaleString('es-ES')}
+                </p>
+                <p className="text-[10px] text-muted-foreground">Agentes especializados</p>
+              </div>
+              <div className="rounded-lg border border-[#2b2e40] bg-[#10131d] px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Apps, SDKs & Modelos</p>
+                <p className="mt-0.5 text-base font-bold text-amber-300">
+                  {extractedSummaryStats.appsAndToolsCount.toLocaleString('es-ES')}
+                </p>
+                <p className="text-[10px] text-muted-foreground">Aplicaciones y librerías</p>
+              </div>
+              <div className="rounded-lg border border-[#2b2e40] bg-[#10131d] px-3 py-2">
+                <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Open Source / Local</p>
+                <p className="mt-0.5 text-base font-bold text-emerald-400">
+                  {extractedSummaryStats.freeOpenSourceCount.toLocaleString('es-ES')} gratis
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  {extractedSummaryStats.noLoginCount} sin login (100% local)
+                </p>
+              </div>
             </div>
 
-            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-emerald-300">
-              <input
-                type="checkbox"
-                checked={onlySubSkills}
-                onChange={e => setOnlySubSkills(e.target.checked)}
-                className="accent-emerald-500"
-              />
-              <span>Solo sub-skills desglosados del interior de packs (ej. anthropics/skills, getsentry/skills)</span>
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-muted-foreground flex items-center gap-1 mr-1">
+                  <Filter className="size-3.5 text-emerald-400" /> Qué hay adentro:
+                </span>
+                {[
+                  { id: 'all', label: `Todos (${skills.length})` },
+                  { id: 'Skill (SKILL.md)', label: `Skills SKILL.md (${extractedSummaryStats.skillsMdCount})` },
+                  { id: 'Servidor / Conector MCP', label: `Servidores MCP (${extractedSummaryStats.mcpCount})` },
+                  { id: 'Subagente Especializado', label: `Subagentes (${extractedSummaryStats.subagentsCount})` },
+                  { id: 'Comando Slash (/cmd)', label: `Comandos /cmd (${extractedSummaryStats.slashCount})` },
+                  { id: 'apps_tools', label: `Apps, Herramientas, SDKs y Modelos (${extractedSummaryStats.appsAndToolsCount})` }
+                ].map(t => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => setSkillKindFilter(t.id)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      skillKindFilter === t.id
+                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                        : 'bg-[#11131c] text-muted-foreground hover:text-foreground border border-transparent'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={pricingFilter}
+                  onChange={e => setPricingFilter(e.target.value)}
+                  className="h-8 rounded-md border border-[#2b2e40] bg-[#0f1118] px-2 text-[11px] text-foreground focus:border-emerald-500 focus:outline-none"
+                >
+                  <option value="all">¿Hay que pagar?: Todos</option>
+                  <option value="100% Gratis (Open Source)">🟢 100% Gratis (Open Source)</option>
+                  <option value="Gratis + BYOK (Tu API Key)">🔑 Gratis + BYOK (Tu API Key)</option>
+                  <option value="Freemium (Local Gratis + Cloud)">☁️ Freemium (Local Gratis + Cloud)</option>
+                </select>
+
+                <select
+                  value={loginFilter}
+                  onChange={e => setLoginFilter(e.target.value)}
+                  className="h-8 rounded-md border border-[#2b2e40] bg-[#0f1118] px-2 text-[11px] text-foreground focus:border-emerald-500 focus:outline-none"
+                >
+                  <option value="all">¿Necesita Login?: Todos</option>
+                  <option value="No (100% Local)">🔓 No (100% Local)</option>
+                  <option value="Opcional (API / Cloud)">⚡ Opcional (API / Cloud)</option>
+                  <option value="Sí (Cuenta / API Key)">🔐 Sí (Cuenta / API Key)</option>
+                </select>
+
+                <select
+                  value={securityFilter}
+                  onChange={e => setSecurityFilter(e.target.value)}
+                  className="h-8 rounded-md border border-[#2b2e40] bg-[#0f1118] px-2 text-[11px] text-foreground focus:border-emerald-500 focus:outline-none"
+                >
+                  <option value="all">Seguridad: Todos</option>
+                  <option value="Alto">🛡️ Seguridad Alta</option>
+                  <option value="Medio">✅ Seguridad Media</option>
+                  <option value="Precaución">⚠️ Precaución</option>
+                </select>
+
+                <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-emerald-300">
+                  <input
+                    type="checkbox"
+                    checked={onlySubSkills}
+                    onChange={e => setOnlySubSkills(e.target.checked)}
+                    className="accent-emerald-500"
+                  />
+                  <span>Solo desglosados del interior de packs</span>
+                </label>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1185,34 +1332,40 @@ export function ReposSkillsExcelTable({
             </tbody>
           </table>
         ) : activeSheet === 'skills' ? (
-          /* ================= PESTAÑA 2: SKILLS DENTRO DE LOS REPOSITORIOS ================= */
+          /* ================= PESTAÑA 2: CATÁLOGO EXTRAÍDO (SKILLS, MCPs, SUBAGENTES Y APLICACIONES ADENTRO DE LOS REPOS) ================= */
           <table className="w-full border-collapse text-left text-xs">
             <thead className="sticky top-0 z-10 bg-[#142420] text-[11px] font-semibold uppercase tracking-wider text-emerald-200 shadow-sm">
               <tr className="border-b border-emerald-500/30">
                 <th className="border-r border-[#21332d] px-3 py-2.5 text-center w-10">#</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[200px]">Skill / Comando</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[290px]">Lo que hace (Español)</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[240px]">Qué tipo de cosas puede hacer</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[210px]">Repositorio al que pertenece</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[110px]">Estrellas (★)</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[220px]">¿Lo recomendás? (Sí / No)</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[190px]">Empresa que lo desarrolló</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[260px]">Para qué proyecto podría servir</th>
-                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[250px]">Comentarios (Editable)</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[215px]">Skill / MCP / Aplicación</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[200px]">Repositorio Padre (★)</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[160px]">¿Es Open Source? / Licencia</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[160px]">¿Necesita Login?</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[180px]">¿Hay que pagar? / Costo</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[280px]">Para qué sirve (Español)</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[250px]">Características y Capacidades</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[240px]">Área / Categoría & Proyecto</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[190px]">De qué Empresa / Creador es</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[140px]">Grado de Seguridad</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[220px]">Puntaje (1-10) & Recomendación</th>
+                <th className="border-r border-[#21332d] px-3 py-2.5 min-w-[240px]">Comentarios (Editable)</th>
                 <th className="px-3 py-2.5 min-w-[180px]">Instalación rápida</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#1e2130]">
               {visibleSkills.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="py-12 text-center text-xs text-muted-foreground">
-                    No se encontraron skills con los filtros seleccionados.
+                  <td colSpan={14} className="py-12 text-center text-xs text-muted-foreground">
+                    No se encontraron skills, MCPs ni aplicaciones con los filtros seleccionados.
                   </td>
                 </tr>
               ) : (
                 visibleSkills.map((skill, idx) => {
                   const rowNum = (currentPage - 1) * (pageSize || filteredSkills.length) + idx + 1
                   const isEditingThisSkill = editingSkillId === skill.id
+                  const openSourceLabel = skill.openSourceLabel || 'Sí · Open Source (GitHub)'
+                  const requiresLogin = skill.requiresLogin || 'No (100% Local)'
+                  const pricingModel = skill.pricingModel || '100% Gratis (Open Source)'
 
                   return (
                     <tr
@@ -1223,7 +1376,7 @@ export function ReposSkillsExcelTable({
                         {rowNum}
                       </td>
 
-                      {/* Skill / Comando */}
+                      {/* Skill / MCP / Aplicación */}
                       <td className="border-r border-[#1e2130] px-3 py-3 align-top">
                         <div className="flex flex-col gap-1">
                           <div className="flex items-center gap-1.5">
@@ -1232,7 +1385,7 @@ export function ReposSkillsExcelTable({
                               target="_blank"
                               rel="noreferrer"
                               className="font-mono text-xs font-bold text-emerald-300 hover:underline break-all"
-                              title="Abrir definición del Skill en GitHub"
+                              title="Abrir archivo o carpeta del recurso en GitHub"
                             >
                               {skill.skillName}
                             </a>
@@ -1241,35 +1394,37 @@ export function ReposSkillsExcelTable({
                               target="_blank"
                               rel="noreferrer"
                               className="text-muted-foreground hover:text-emerald-300 shrink-0"
-                              title="Ver archivo SKILL.md / código del skill"
+                              title="Ver código en GitHub"
                             >
                               <ExternalLink className="size-3" />
                             </a>
                           </div>
                           <div className="flex flex-wrap items-center gap-1">
-                            <span className="rounded bg-[#1a2825] px-1.5 py-0.5 text-[10px] font-medium text-emerald-400">
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                skill.skillKind === 'Servidor / Conector MCP'
+                                  ? 'bg-sky-500/20 text-sky-300 border border-sky-500/30'
+                                  : skill.skillKind === 'Subagente Especializado'
+                                  ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                  : skill.skillKind === 'Comando Slash (/cmd)'
+                                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                  : skill.skillKind === 'Skill (SKILL.md)'
+                                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                  : 'bg-[#1f2437] text-[#bfb8ff] border border-[#323854]'
+                              }`}
+                            >
                               {skill.skillKind}
                             </span>
                             {skill.isSubSkillFromReadme && (
                               <span className="rounded bg-[#242138] px-1.5 py-0.5 text-[10px] text-[#bfb8ff]">
-                                Dentro del repo
+                                Extraído de adentro del repo
                               </span>
                             )}
                           </div>
                         </div>
                       </td>
 
-                      {/* Lo que hace */}
-                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-[#e2e4f0]">
-                        {skill.whatItDoesEs}
-                      </td>
-
-                      {/* Qué tipo de cosas puede hacer */}
-                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-[#91d0b4]">
-                        {skill.capabilitiesEs}
-                      </td>
-
-                      {/* Repositorio al que pertenece */}
+                      {/* Repositorio al que pertenece + Estrellas */}
                       <td className="border-r border-[#1e2130] px-3 py-3 align-top">
                         <div className="flex flex-col gap-1">
                           <a
@@ -1282,7 +1437,11 @@ export function ReposSkillsExcelTable({
                             <span>{skill.repoFullName}</span>
                             <ExternalLink className="size-2.5 shrink-0" />
                           </a>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-1 font-mono text-[11px] font-semibold text-amber-300">
+                              <Star className="size-3 fill-amber-400 text-amber-400" />
+                              <span>{(skill.stars || 0).toLocaleString()}</span>
+                            </div>
                             <button
                               type="button"
                               onClick={() =>
@@ -1293,27 +1452,125 @@ export function ReposSkillsExcelTable({
                               className="text-[10px] text-muted-foreground hover:text-emerald-300 underline"
                             >
                               {repoFilterForSkills === skill.repoFullName
-                                ? 'Mostrar todos los repos'
-                                : 'Filtrar skills de este repo'}
+                                ? 'Ver todos'
+                                : 'Filtrar repo'}
                             </button>
                           </div>
                         </div>
                       </td>
 
-                      {/* Estrellas */}
-                      <td className="border-r border-[#1e2130] px-3 py-3 align-top font-mono">
-                        <div className="flex items-center gap-1 font-semibold text-amber-300">
-                          <Star className="size-3.5 fill-amber-400 text-amber-400" />
-                          <span>{(skill.stars || 0).toLocaleString()}</span>
-                        </div>
-                        <span className="text-[10px] text-muted-foreground">
-                          Seguridad: {skill.securityGrade}
+                      {/* ¿Es Open Source? & Licencia */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <span className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                          <Check className="size-3 shrink-0" />
+                          <span>{openSourceLabel}</span>
+                        </span>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          Código auditable en GitHub ({skill.licenseName || 'Open Source'})
+                        </p>
+                      </td>
+
+                      {/* ¿Necesita Login? */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
+                            requiresLogin === 'No (100% Local)'
+                              ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                              : requiresLogin === 'Opcional (API / Cloud)'
+                              ? 'border-sky-500/40 bg-sky-500/15 text-sky-300'
+                              : 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                          }`}
+                        >
+                          {requiresLogin === 'No (100% Local)'
+                            ? '🔓 No (100% Local)'
+                            : requiresLogin === 'Opcional (API / Cloud)'
+                            ? '⚡ Opcional (API / Cloud)'
+                            : '🔐 Sí (Cuenta / API Key)'}
                         </span>
                       </td>
 
-                      {/* ¿Lo recomendás? */}
+                      {/* ¿Hay que pagar? / Costo */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-semibold ${
+                            pricingModel === '100% Gratis (Open Source)'
+                              ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                              : pricingModel === 'Gratis + BYOK (Tu API Key)'
+                              ? 'border-[#7c6cf0]/40 bg-[#7c6cf0]/15 text-[#bfb8ff]'
+                              : 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                          }`}
+                        >
+                          {pricingModel === '100% Gratis (Open Source)'
+                            ? '🟢 No · 100% Gratis'
+                            : pricingModel === 'Gratis + BYOK (Tu API Key)'
+                            ? '🔑 Gratis + BYOK (Tu Key)'
+                            : '☁️ Freemium (Local Gratis)'}
+                        </span>
+                      </td>
+
+                      {/* Para qué sirve */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-[#e2e4f0]">
+                        {skill.whatItDoesEs}
+                      </td>
+
+                      {/* Características y Capacidades */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-[#91d0b4]">
+                        {skill.capabilitiesEs}
+                      </td>
+
+                      {/* Área / Categoría & Proyecto */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-muted-foreground">
+                        <span className="mb-1 inline-block rounded bg-[#181b28] px-1.5 py-0.5 text-[10px] font-medium text-[#bfb8ff]">
+                          {skill.areaCategory}
+                        </span>
+                        <p className="text-[11px]">{skill.projectUseCases}</p>
+                      </td>
+
+                      {/* Empresa que lo desarrolló */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="font-medium text-foreground flex items-center gap-1.5">
+                          <Building2 className="size-3.5 text-emerald-400 shrink-0" />
+                          <span>{skill.companyOrAuthor}</span>
+                        </div>
+                        <span className="mt-1 inline-block text-[10px] text-muted-foreground">
+                          {skill.creatorKind}
+                        </span>
+                      </td>
+
+                      {/* Grado de Seguridad */}
+                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
+                        <div className="flex items-center gap-1">
+                          <ShieldCheck
+                            className={`size-3.5 shrink-0 ${
+                              skill.securityGrade === 'Alto'
+                                ? 'text-emerald-400'
+                                : skill.securityGrade === 'Medio'
+                                ? 'text-sky-400'
+                                : 'text-amber-400'
+                            }`}
+                          />
+                          <span className="font-semibold text-foreground">{skill.securityGrade}</span>
+                        </div>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          {skill.securityGrade === 'Alto'
+                            ? 'Organización / repo verificado'
+                            : skill.securityGrade === 'Medio'
+                            ? 'Open source auditable'
+                            : 'Revisar permisos locales'}
+                        </p>
+                      </td>
+
+                      {/* Puntaje de Importancia (1-10) & ¿Lo recomendás? */}
                       <td className="border-r border-[#1e2130] px-3 py-3 align-top">
                         <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="rounded bg-[#252238] px-1.5 py-0.5 font-mono text-xs font-bold text-[#bfb8ff]">
+                              ★ {skill.atlasScore}/10
+                            </span>
+                            <span className="text-[10px] text-emerald-300 font-medium">
+                              Importancia
+                            </span>
+                          </div>
                           <select
                             value={skill.recommended}
                             onChange={e =>
@@ -1345,28 +1602,9 @@ export function ReposSkillsExcelTable({
                             </option>
                           </select>
                           <p className="text-[10px] text-muted-foreground leading-snug">
-                            <strong className="text-[#bfb8ff]">{skill.atlasScore}/10</strong> · {skill.recommendationReason}
+                            {skill.recommendationReason}
                           </p>
                         </div>
-                      </td>
-
-                      {/* Empresa que lo desarrolló */}
-                      <td className="border-r border-[#1e2130] px-3 py-3 align-top">
-                        <div className="font-medium text-foreground flex items-center gap-1.5">
-                          <Building2 className="size-3.5 text-emerald-400 shrink-0" />
-                          <span>{skill.companyOrAuthor}</span>
-                        </div>
-                        <span className="mt-1 inline-block text-[10px] text-muted-foreground">
-                          {skill.creatorKind}
-                        </span>
-                      </td>
-
-                      {/* Para qué proyecto podría servir */}
-                      <td className="border-r border-[#1e2130] px-3 py-3 align-top leading-relaxed text-muted-foreground">
-                        <span className="mb-1 inline-block rounded bg-[#181b28] px-1.5 py-0.5 text-[10px] font-medium text-[#bfb8ff]">
-                          {skill.areaCategory}
-                        </span>
-                        <p>{skill.projectUseCases}</p>
                       </td>
 
                       {/* Comentarios (Editable) */}
@@ -1377,7 +1615,7 @@ export function ReposSkillsExcelTable({
                               rows={2}
                               value={editingSkillComment}
                               onChange={e => setEditingSkillComment(e.target.value)}
-                              placeholder="Agregá tus comentarios sobre este skill..."
+                              placeholder="Agregá tus comentarios sobre este skill o MCP..."
                               className="w-full rounded border border-emerald-500 bg-[#0b0d13] p-1.5 text-xs text-foreground focus:outline-none"
                             />
                             <div className="flex items-center gap-1.5">
@@ -1463,7 +1701,7 @@ export function ReposSkillsExcelTable({
                               rel="noreferrer"
                               className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:underline"
                             >
-                              Ver Skill <ExternalLink className="size-2.5" />
+                              Ver recurso <ExternalLink className="size-2.5" />
                             </a>
                           </div>
                         </div>

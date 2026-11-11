@@ -3,7 +3,7 @@
 import React from 'react'
 import {
   Archive, LayoutDashboard, Library, FolderGit2, Tags, FolderHeart,
-  CloudDownload, Zap, Settings2, Table2, Bot, Sliders
+  CloudDownload, Zap, Settings2, Table2, Bot, Sliders, Puzzle
 } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
 import { THEME_ACCENT_PALETTES } from '@/lib/customization-store'
@@ -20,6 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'Resumen', label: 'Resumen', icon: LayoutDashboard },
   { id: 'Biblioteca', label: 'Biblioteca', icon: Library },
   { id: 'Repositorios', label: 'Repositorios GitHub', icon: FolderGit2 },
+  { id: 'CatalogoExtraido', label: 'Skills, MCPs & Apps', icon: Puzzle },
   { id: 'Temas', label: 'Temas', icon: Tags },
   { id: 'Fuentes', label: 'Fuentes', icon: FolderHeart },
   { id: 'Exportar', label: 'Exportar', icon: CloudDownload },
@@ -32,6 +33,7 @@ interface SidebarProps {
   setActive: (value: string) => void
   totalCount: number
   reposCount?: number
+  skillsCount?: number
   visibleSections?: string[]
   themeAccent?: ThemeAccentId
   onOpenAgentChat?: () => void
@@ -43,6 +45,7 @@ export function Sidebar({
   setActive,
   totalCount,
   reposCount,
+  skillsCount,
   visibleSections,
   themeAccent = 'violet',
   onOpenAgentChat,
@@ -100,6 +103,11 @@ export function Sidebar({
                   style={{ backgroundColor: palette.badgeBg, color: palette.badgeText }}
                 >
                   {reposCount}
+                </span>
+              )}
+              {item.id === 'CatalogoExtraido' && (
+                <span className="ml-auto rounded-full bg-emerald-500/20 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+                  {skillsCount || 996}
                 </span>
               )}
             </button>

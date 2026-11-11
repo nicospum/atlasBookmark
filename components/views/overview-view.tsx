@@ -3,7 +3,7 @@
 import React, { useState } from 'react'
 import {
   Bookmark, Hash, Image as ImageIcon, Camera, X as XIcon,
-  RefreshCw, ArrowUpRight, Plus, Sparkles, FolderGit2
+  RefreshCw, ArrowUpRight, Plus, Sparkles, FolderGit2, Puzzle
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -116,6 +116,13 @@ export function OverviewView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            className="border-emerald-500/40 bg-emerald-950/30 text-xs text-emerald-300 hover:bg-emerald-900/40"
+            onClick={() => onNavigate('CatalogoExtraido')}
+          >
+            <Puzzle className="size-3.5 mr-1.5 text-emerald-400" /> Skills, MCPs & Apps (Adentro de Repos)
+          </Button>
           <Button
             variant="outline"
             className="border-[#463f73] bg-[#211e35] text-xs text-[#cfcaff] hover:bg-[#2b2745]"
