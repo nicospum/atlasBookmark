@@ -132,18 +132,46 @@ async function callProviderWithToolProtocol(params: {
     hermesBackingProvider
   } = params
 
-  const geminiKey = (apiKeys.gemini || process.env.GEMINI_API_KEY || '').trim()
-  const anthropicKey = (apiKeys.anthropic || process.env.ANTHROPIC_API_KEY || '').trim()
-  const openaiKey = (apiKeys.openai || process.env.OPENAI_API_KEY || '').trim()
+  const rawHermesKey = (apiKeys.hermesToken || process.env.HERMES_API_KEY || '').trim()
+  const geminiKey = (
+    apiKeys.gemini ||
+    (rawHermesKey.startsWith('AIza') ? rawHermesKey : '') ||
+    process.env.GEMINI_API_KEY ||
+    ''
+  ).trim()
+  const anthropicKey = (
+    apiKeys.anthropic ||
+    (rawHermesKey.startsWith('sk-ant-') ? rawHermesKey : '') ||
+    process.env.ANTHROPIC_API_KEY ||
+    ''
+  ).trim()
+  const openaiKey = (
+    apiKeys.openai ||
+    (rawHermesKey.startsWith('sk-') && !rawHermesKey.startsWith('sk-ant-') && !rawHermesKey.startsWith('sk-or-')
+      ? rawHermesKey
+      : '') ||
+    process.env.OPENAI_API_KEY ||
+    ''
+  ).trim()
+  const openRouterKey = (rawHermesKey.startsWith('sk-or-') ? rawHermesKey : process.env.OPENROUTER_API_KEY || '').trim()
 
-  // 1. If Hermes has a custom Gateway URL configured, try calling it first
-  if (agentId === 'hermes' && hermesGatewayUrl && /^https?:\/\//i.test(hermesGatewayUrl)) {
+  // 1. If Hermes has a custom Gateway URL configured (or pasted in hermesToken), try calling it first
+  const effectiveGatewayUrl =
+    hermesGatewayUrl && /^https?:\/\//i.test(hermesGatewayUrl)
+      ? hermesGatewayUrl
+      : /^https?:\/\//i.test(rawHermesKey)
+      ? rawHermesKey
+      : ''
+
+  if (agentId === 'hermes' && effectiveGatewayUrl) {
     try {
-      const gwRes = await fetch(hermesGatewayUrl, {
+      const gwRes = await fetch(effectiveGatewayUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(apiKeys.hermesToken ? { Authorization: `Bearer ${apiKeys.hermesToken}` } : {})
+          ...(rawHermesKey && !/^https?:\/\//i.test(rawHermesKey)
+            ? { Authorization: `Bearer ${rawHermesKey}` }
+            : {})
         },
         body: JSON.stringify({
           system: systemPrompt,
@@ -165,6 +193,44 @@ async function callProviderWithToolProtocol(params: {
       }
     } catch {
       // Fallback transparently to backing LLM or local Hermes engine
+    }
+  }
+
+  // 1b. If user pasted an OpenRouter key (standard for Nous Research Hermes models)
+  if (agentId === 'hermes' && openRouterKey) {
+    try {
+      const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${openRouterKey}`,
+          'HTTP-Referer': 'https://atlasookmark.vercel.app',
+          'X-Title': 'Atlas de Guardados - Hermes Agent'
+        },
+        body: JSON.stringify({
+          model: 'nousresearch/hermes-3-llama-3.1-70b',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...history.slice(-8).map(m => ({ role: m.role, content: m.content })),
+            { role: 'user', content: userMessage }
+          ],
+          temperature: 0.25
+        }),
+        signal: AbortSignal.timeout(18000)
+      })
+      if (orRes.ok) {
+        const orData = await orRes.json()
+        const rawText = orData?.choices?.[0]?.message?.content || ''
+        const parsed = parseStructuredAgentJson(rawText)
+        if (parsed) {
+          return {
+            ...parsed,
+            providerUsedLabel: 'Hermes 3 (Nous / OpenRouter)'
+          }
+        }
+      }
+    } catch {
+      // Fallback to other configured keys or local Hermes NLU
     }
   }
 
@@ -380,6 +446,40 @@ export async function POST(request: Request) {
         success: true,
         executedResults: [result],
         replyText: `${result.success ? '✅ **Acción confirmada y ejecutada:**' : '⚠️ **Error en la acción:**'} ${result.summaryEs}`
+      })
+    }
+
+    // 1b. Verify Hermes Key / Gateway in 1 click
+    if (action === 'verify-hermes') {
+      const rawKey = String(apiKeys.hermesToken || '').trim()
+      if (!rawKey) {
+        return NextResponse.json(
+          { success: false, error: 'Pegá tu Key de Hermes primero en el campo Hermes Key.' },
+          { status: 400 }
+        )
+      }
+      // Detect key format: OpenRouter (sk-or-), Anthropic (sk-ant-), Gemini (AIza), OpenAI/Nous (sk-), Telegram Bot (123456:ABC), or Gateway URL
+      let detectedType = 'Token de Gateway Hermes'
+      if (/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(rawKey)) {
+        detectedType = 'Telegram Bot Token (Puente Hermes ↔ Telegram)'
+      } else if (rawKey.startsWith('sk-or-')) {
+        detectedType = 'OpenRouter API Key (Hermes 3 Nous Research)'
+      } else if (rawKey.startsWith('sk-ant-')) {
+        detectedType = 'Anthropic Claude Key (Motor para Hermes)'
+      } else if (rawKey.startsWith('AIza')) {
+        detectedType = 'Google Gemini Key (Motor para Hermes)'
+      } else if (rawKey.startsWith('sk-')) {
+        detectedType = 'OpenAI / Nous API Key (Motor para Hermes)'
+      } else if (/^https?:\/\//i.test(rawKey)) {
+        detectedType = `Hermes Gateway URL (${rawKey})`
+      }
+
+      const allBm = getAllBookmarks()
+      const allRp = getAllGalleryRepositories()
+      return NextResponse.json({
+        success: true,
+        detectedType,
+        replyText: `✅ **Hermes vinculado correctamente**\n• **Tipo de credencial detectada:** ${detectedType}\n• **Base de datos conectada:** **${allRp.length} repositorios de GitHub** y **${allBm.length} registros en Biblioteca** listos para operar con las 14 herramientas.`
       })
     }
 

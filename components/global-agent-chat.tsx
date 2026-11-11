@@ -166,6 +166,66 @@ export function GlobalAgentChat({
     }
   }, [open, turns.length])
 
+  // Active Telegram Long-Polling so Hermes ↔ Telegram works even on localhost or behind Vercel Auth
+  useEffect(() => {
+    const candidateTgToken = (
+      apiKeys.telegramBotToken ||
+      (/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(apiKeys.hermesToken || '') ? apiKeys.hermesToken : '') ||
+      ''
+    ).trim()
+    if (!candidateTgToken) return
+
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch('/api/agent/telegram', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'poll-updates',
+            botToken: candidateTgToken
+          })
+        })
+        const data = await res.json().catch(() => null)
+        if (data?.success && Array.isArray(data.events) && data.events.length > 0) {
+          for (const ev of data.events) {
+            if (Array.isArray(ev.executedResults)) {
+              for (const ex of ev.executedResults) {
+                if (ex.clientEffects) {
+                  onExecuteClientEffects(ex.clientEffects)
+                }
+              }
+            }
+            setTurns(prev => [
+              ...prev,
+              ...(ev.userText
+                ? [
+                    {
+                      id: `tg-u-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                      role: 'user' as const,
+                      content: `📱 [Telegram] ${ev.userText}`,
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    }
+                  ]
+                : []),
+              {
+                id: `tg-a-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                role: 'assistant' as const,
+                agentId: 'hermes',
+                providerLabel: 'Hermes · Telegram En Vivo',
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                content: ev.replyText || 'Acción ejecutada desde Telegram.',
+                executedTools: ev.executedResults || [],
+                pendingConfirmations: ev.pendingConfirmations || []
+              }
+            ])
+          }
+        }
+      } catch {}
+    }, 4000)
+
+    return () => clearInterval(timer)
+  }, [apiKeys.telegramBotToken, apiKeys.hermesToken, onExecuteClientEffects])
+
   const handleSelectAgent = (agentId: 'hermes' | 'gemini' | 'anthropic' | 'openai') => {
     setSelectedAgent(agentId)
     const providerObj = AGENT_PROVIDERS.find(p => p.id === agentId)
@@ -357,6 +417,7 @@ export function GlobalAgentChat({
   )
 
   const configuredKeysCount = [
+    apiKeys.hermesToken,
     apiKeys.gemini,
     apiKeys.anthropic,
     apiKeys.openai,
@@ -538,6 +599,118 @@ export function GlobalAgentChat({
             Configurá tus claves para intercambiar en vivo entre **Hermes**, **Gemini**, **Claude** y **ChatGPT**.
           </p>
           <div className="space-y-1.5">
+            <div className="flex items-center gap-2 pb-1.5 border-b border-white/10">
+              <span className="w-24 text-[11px] text-[#bfb8ff] font-semibold">Hermes Key ★:</span>
+              <input
+                type="password"
+                value={apiKeys.hermesToken || ''}
+                onChange={e => handleSaveKeys({ ...apiKeys, hermesToken: e.target.value })}
+                placeholder="sk-or-... / Key de Hermes / Gateway URL"
+                className="flex-1 rounded border border-[#564c96] bg-[#0f1118] px-2 py-1 text-xs text-white"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  const raw = (apiKeys.hermesToken || '').trim()
+                  if (!raw) return
+                  // If the user pasted a Telegram Bot token inside Hermes Key, link it via Telegram route automatically
+                  if (/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(raw)) {
+                    handleSaveKeys({ ...apiKeys, hermesToken: raw, telegramBotToken: raw })
+                    const tgRes = await fetch('/api/agent/telegram', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ action: 'register-webhook', botToken: raw })
+                    })
+                    const tgData = await tgRes.json()
+                    setTurns(prev => [
+                      ...prev,
+                      {
+                        id: `hm-tg-${Date.now()}`,
+                        role: 'assistant',
+                        agentId: 'hermes',
+                        providerLabel: 'Hermes · Vinculación',
+                        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        content: tgData.success
+                          ? tgData.message
+                          : `⚠️ Error al vincular token: ${tgData.error}`
+                      }
+                    ])
+                    setShowKeyPanel(false)
+                    return
+                  }
+
+                  const res = await fetch('/api/agent/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      action: 'verify-hermes',
+                      apiKeys
+                    })
+                  })
+                  const data = await res.json()
+                  setTurns(prev => [
+                    ...prev,
+                    {
+                      id: `hm-${Date.now()}`,
+                      role: 'assistant',
+                      agentId: 'hermes',
+                      providerLabel: 'Hermes · Vinculación',
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                      content: data.success
+                        ? data.replyText
+                        : `⚠️ No se pudo verificar la Key de Hermes: ${data.error}`
+                    }
+                  ])
+                  if (data.success) setShowKeyPanel(false)
+                }}
+                className="rounded border border-[#7c6cf0]/60 bg-[#7c6cf0]/25 px-2.5 py-1 text-[10px] font-semibold text-[#d8d3ff] hover:bg-[#7c6cf0]/40"
+              >
+                Vincular
+              </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-24 text-[11px] text-emerald-300 font-medium">Telegram Bot:</span>
+              <input
+                type="password"
+                value={apiKeys.telegramBotToken || ''}
+                onChange={e => handleSaveKeys({ ...apiKeys, telegramBotToken: e.target.value })}
+                placeholder="123456:ABC-DEF... (Token de @BotFather)"
+                className="flex-1 rounded border border-border bg-[#0f1118] px-2 py-1 text-xs text-white"
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  const token = (apiKeys.telegramBotToken || apiKeys.hermesToken || '').trim()
+                  if (!token) return
+                  const res = await fetch('/api/agent/telegram', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      action: 'register-webhook',
+                      botToken: token
+                    })
+                  })
+                  const data = await res.json()
+                  setTurns(prev => [
+                    ...prev,
+                    {
+                      id: `tg-${Date.now()}`,
+                      role: 'assistant',
+                      agentId: 'hermes',
+                      providerLabel: 'Hermes · Puente Telegram',
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                      content: data.success
+                        ? data.message
+                        : `⚠️ ${data.error || 'No se pudo vincular el bot de Telegram.'}`
+                    }
+                  ])
+                  if (data.success) setShowKeyPanel(false)
+                }}
+                className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1 text-[10px] font-medium text-emerald-300 hover:bg-emerald-500/25"
+              >
+                Vincular
+              </button>
+            </div>
             <div className="flex items-center gap-2">
               <span className="w-24 text-[11px] text-muted-foreground">Gemini Key:</span>
               <input
@@ -577,47 +750,6 @@ export function GlobalAgentChat({
                 placeholder="ghp_... (opcional para 5000 req/h)"
                 className="flex-1 rounded border border-border bg-[#0f1118] px-2 py-1 text-xs text-white"
               />
-            </div>
-            <div className="flex items-center gap-2 pt-1 border-t border-white/10">
-              <span className="w-24 text-[11px] text-emerald-300 font-medium">Telegram Bot:</span>
-              <input
-                type="password"
-                value={apiKeys.telegramBotToken || ''}
-                onChange={e => handleSaveKeys({ ...apiKeys, telegramBotToken: e.target.value })}
-                placeholder="123456:ABC-DEF... (BotFather Token)"
-                className="flex-1 rounded border border-border bg-[#0f1118] px-2 py-1 text-xs text-white"
-              />
-              <button
-                type="button"
-                onClick={async () => {
-                  if (!apiKeys.telegramBotToken) return
-                  const res = await fetch('/api/agent/telegram', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      action: 'register-webhook',
-                      botToken: apiKeys.telegramBotToken
-                    })
-                  })
-                  const data = await res.json()
-                  setTurns(prev => [
-                    ...prev,
-                    {
-                      id: `tg-${Date.now()}`,
-                      role: 'assistant',
-                      agentId: 'hermes',
-                      providerLabel: 'Hermes · Puente Telegram',
-                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                      content: data.success
-                        ? `✅ **Webhook de Telegram conectado a Hermes:** \`${data.webhookUrl}\`. Ya podés hablarle a tu bot en Telegram y ejecutará las 14 herramientas de Atlas.`
-                        : `⚠️ No se pudo registrar el Webhook en Telegram: ${JSON.stringify(data.telegramResponse || data.error)}`
-                    }
-                  ])
-                }}
-                className="rounded border border-emerald-500/40 bg-emerald-500/15 px-2 py-1 text-[10px] font-medium text-emerald-300 hover:bg-emerald-500/25"
-              >
-                Vincular
-              </button>
             </div>
           </div>
         </div>

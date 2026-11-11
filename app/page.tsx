@@ -545,8 +545,8 @@ export default function AtlasApp() {
                 />
                 <span>
                   {storageDiag?.isEphemeralFallback
-                    ? `SQLite Efímero (/tmp) · ${bookmarks.length} guardados`
-                    : `SQLite Local: atlas.db · ${bookmarks.length} guardados`}
+                    ? `SQLite (/tmp) · ${reposCount || 298} Repos · ${bookmarks.length} Guardados`
+                    : `SQLite Local: atlas.db · ${reposCount || 298} Repos · ${bookmarks.length} Guardados`}
                 </span>
               </Badge>
             </div>

@@ -7,12 +7,12 @@ import {
 } from '@/lib/agent-tools'
 import { DEFAULT_CUSTOMIZATION_CONFIG } from '@/lib/customization-store'
 import { getAllBookmarks, getAllGalleryRepositories } from '@/lib/bookmarks-repository'
-import type { AgentSectionContext, AgentToolCallRequest } from '@/lib/types'
+import type { AgentSectionContext, AgentToolCallRequest, AgentToolExecutionResult } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
 
-// Store pending confirmations in-memory for Telegram inline button callbacks
 const pendingTelegramConfirmations = new Map<string, AgentToolCallRequest>()
+let lastProcessedUpdateId = 0
 
 function buildDefaultServerSectionContext(): AgentSectionContext {
   const bookmarks = getAllBookmarks()
@@ -21,7 +21,7 @@ function buildDefaultServerSectionContext(): AgentSectionContext {
     b => b.resourceType === 'Archivo separado / Otro tema (No técnico)'
   ).length
   const fallbackLinksCount = bookmarks.filter(b =>
-    (b.urls || []).some(u => String(u).startsWith('fallback_ref:'))
+    (b.resources || []).some(r => r.id?.startsWith('fallback_ref:'))
   ).length
 
   return {
@@ -71,6 +71,145 @@ async function answerCallbackQuery(botToken: string, callbackQueryId: string, te
   }).catch(() => null)
 }
 
+async function processSingleTelegramUpdate(
+  botToken: string,
+  updateObj: any
+): Promise<{
+  userText?: string
+  replyText?: string
+  executedResults: AgentToolExecutionResult[]
+  pendingConfirmations: AgentToolCallRequest[]
+}> {
+  const executedResults: AgentToolExecutionResult[] = []
+  const pendingConfirmations: AgentToolCallRequest[] = []
+  const sectionContext = buildDefaultServerSectionContext()
+
+  if (updateObj.callback_query) {
+    const cq = updateObj.callback_query
+    const chatId = cq.message?.chat?.id
+    const dataStr = String(cq.data || '')
+
+    if (dataStr.startsWith('confirm:')) {
+      const confirmId = dataStr.replace('confirm:', '')
+      const pendingCall = pendingTelegramConfirmations.get(confirmId)
+      if (!pendingCall) {
+        await answerCallbackQuery(botToken, cq.id, 'Esta confirmación ya expiró o fue ejecutada.')
+        return { executedResults, pendingConfirmations }
+      }
+      pendingTelegramConfirmations.delete(confirmId)
+      const execRes = await executeAgentToolServer(pendingCall, {
+        sectionContext,
+        currentCustomization: DEFAULT_CUSTOMIZATION_CONFIG
+      })
+      executedResults.push(execRes)
+      await answerCallbackQuery(botToken, cq.id, 'Acción confirmada y ejecutada')
+      const replyText = `${execRes.success ? '✅' : '⚠️'} *Acción confirmada en Atlas:*\n${execRes.summaryEs}`
+      if (chatId) {
+        await sendTelegramMessage(botToken, chatId, replyText)
+      }
+      return { replyText, executedResults, pendingConfirmations }
+    }
+
+    if (dataStr.startsWith('cancel:')) {
+      const confirmId = dataStr.replace('cancel:', '')
+      pendingTelegramConfirmations.delete(confirmId)
+      await answerCallbackQuery(botToken, cq.id, 'Acción cancelada')
+      const replyText = '❌ *Acción cancelada por el usuario.*'
+      if (chatId) {
+        await sendTelegramMessage(botToken, chatId, replyText)
+      }
+      return { replyText, executedResults, pendingConfirmations }
+    }
+  }
+
+  const tgMessage = updateObj.message || updateObj.edited_message
+  if (tgMessage && tgMessage.text) {
+    const chatId = tgMessage.chat?.id
+    const text = String(tgMessage.text).trim()
+
+    if (text === '/start' || text === '/help') {
+      const welcome = [
+        '🤖 *Hermes — Conectado a tu Atlas de Guardados*',
+        '',
+        `📊 *Estado en vivo:* ${sectionContext.totalRepos} repositorios GitHub | ${sectionContext.totalBookmarks} registros en Biblioteca | ${sectionContext.fallbackLinksCount} con "El Link de ese Link" | ${sectionContext.separatedCount} separados off-topic.`,
+        '',
+        'Escribime en lenguaje natural igual que en el chat de la app:',
+        '• _"Guardá este repo https://github.com/upstash/context7"_',
+        '• _"¿Cuántos repositorios y guardados tengo?"_',
+        '• _"Investigá los links y comentarios pendientes"_',
+        '• _"Separá los archivos off-topic no técnicos"_',
+        '• _"Recomendame un stack para un agente con MCP y Telegram"_'
+      ].join('\n')
+
+      if (botToken && chatId) {
+        await sendTelegramMessage(botToken, chatId, welcome)
+      }
+      return { userText: text, replyText: welcome, executedResults, pendingConfirmations }
+    }
+
+    const inferredCalls = inferNaturalLanguageToolCalls(
+      text,
+      sectionContext,
+      'confirm_sensitive'
+    )
+
+    for (const call of inferredCalls) {
+      if (shouldRequireToolConfirmation(call.toolName, 'confirm_sensitive')) {
+        pendingConfirmations.push(call)
+      } else {
+        const res = await executeAgentToolServer(call, {
+          sectionContext,
+          currentCustomization: DEFAULT_CUSTOMIZATION_CONFIG
+        })
+        executedResults.push(res)
+      }
+    }
+
+    const replyParts: string[] = []
+    for (const ex of executedResults) {
+      replyParts.push(`${ex.success ? '✅' : '⚠️'} ${ex.summaryEs}`)
+    }
+
+    if (pendingConfirmations.length > 0 && botToken && chatId) {
+      for (const pending of pendingConfirmations) {
+        const shortId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
+        pendingTelegramConfirmations.set(shortId, pending)
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `🛡️ *Confirmación requerida por Hermes*\nHerramienta: \`${pending.toolName}\`\nMotivo: ${pending.reasonEs}`,
+          [
+            [
+              { text: '✅ Confirmar y Ejecutar', callback_data: `confirm:${shortId}` },
+              { text: '❌ Cancelar', callback_data: `cancel:${shortId}` }
+            ]
+          ]
+        )
+      }
+    }
+
+    if (replyParts.length === 0 && pendingConfirmations.length === 0) {
+      replyParts.push(
+        `🤖 *Hermes (Atlas)*: Recibí tu mensaje (_"${text}"_). Tenés *${sectionContext.totalRepos} repositorios de GitHub* y *${sectionContext.totalBookmarks} guardados totales*. Decime si querés guardar un link, buscar un recurso, auditar un repo o armar un stack.`
+      )
+    }
+
+    const finalReply = replyParts.join('\n\n')
+    if (finalReply && botToken && chatId) {
+      await sendTelegramMessage(botToken, chatId, finalReply)
+    }
+
+    return {
+      userText: text,
+      replyText: finalReply,
+      executedResults,
+      pendingConfirmations
+    }
+  }
+
+  return { executedResults, pendingConfirmations }
+}
+
 export async function GET() {
   const ctx = buildDefaultServerSectionContext()
   return NextResponse.json({
@@ -84,11 +223,6 @@ export async function GET() {
       totalRepos: ctx.totalRepos,
       separatedOffTopic: ctx.separatedCount,
       fallbackLinksCount: ctx.fallbackLinksCount
-    },
-    usage: {
-      telegramWebhookUrl: '/api/agent/telegram',
-      registerAction: 'POST /api/agent/telegram { "action": "register-webhook", "botToken": "...", "webhookUrl": "https://tu-dominio.vercel.app/api/agent/telegram" }',
-      hermesDirectAction: 'POST /api/agent/telegram { "action": "hermes-command", "text": "Guardá https://github.com/owner/repo" }'
     }
   })
 }
@@ -98,35 +232,95 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const botToken = String(body.botToken || process.env.TELEGRAM_BOT_TOKEN || '').trim()
 
-    // 1. Register Telegram Webhook in 1 click from the web app
+    // 1. Verify Bot & Connect (works both via Webhook AND via Long-Polling on localhost/Vercel)
     if (body.action === 'register-webhook') {
       if (!botToken) {
         return NextResponse.json(
-          { success: false, error: 'Falta TELEGRAM_BOT_TOKEN para registrar el webhook.' },
+          { success: false, error: 'Pegá primero el Token de tu Bot de Telegram (de @BotFather).' },
           { status: 400 }
         )
       }
-      const origin =
-        String(body.webhookUrl || '').trim() ||
-        `${req.nextUrl.protocol}//${req.nextUrl.host}/api/agent/telegram`
 
-      const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: origin,
-          allowed_updates: ['message', 'callback_query']
+      // Always verify the bot token first via getMe
+      const meRes = await fetch(`https://api.telegram.org/bot${botToken}/getMe`)
+      const meData = await meRes.json().catch(() => null)
+      if (!meRes.ok || !meData?.ok) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Token rechazado por Telegram: ${meData?.description || 'Verificá que sea un token de @BotFather (formato 123456:ABC...). Si es una API Key de Hermes/OpenRouter, pegala arriba en "Hermes Key ★".'}`
+          },
+          { status: 400 }
+        )
+      }
+
+      const botUsername = meData.result?.username ? `@${meData.result.username}` : meData.result?.first_name || 'Bot'
+      const host = req.nextUrl.host || ''
+      const isLocalhost = host.includes('localhost') || host.includes('127.0.0.1')
+
+      // Delete any blocked webhook first so getUpdates polling works everywhere immediately
+      await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`).catch(() => null)
+
+      let mode = 'polling'
+      let webhookUrl = `${req.nextUrl.protocol}//${host}/api/agent/telegram`
+
+      if (!isLocalhost && body.preferWebhook) {
+        const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: webhookUrl,
+            allowed_updates: ['message', 'callback_query']
+          })
         })
-      })
-      const tgData = await tgRes.json()
+        const tgData = await tgRes.json().catch(() => null)
+        if (tgData?.ok) {
+          mode = 'webhook'
+        }
+      }
+
       return NextResponse.json({
-        success: Boolean(tgData.ok),
-        webhookUrl: origin,
-        telegramResponse: tgData
+        success: true,
+        botUsername,
+        mode,
+        webhookUrl,
+        message: `✅ Bot ${botUsername} verificado y vinculado con Hermes (modo ${
+          mode === 'polling' ? 'Sincronización Directa en Vivo sin necesidad de túnel' : 'Webhook HTTPS'
+        }). Mandale un mensaje a ${botUsername} en Telegram (ej. "/start" o "Guardá https://github.com/owner/repo") y se ejecutará automáticamente.`
       })
     }
 
-    // 2. Direct Hermes external bridge command (e.g. from local Hermes daemon / CLI / MCP)
+    // 2. Poll Telegram Updates (getUpdates) so Telegram works on localhost AND behind Vercel Auth
+    if (body.action === 'poll-updates') {
+      if (!botToken || !/^\d{6,15}:[A-Za-z0-9_-]{20,}$/.test(botToken)) {
+        return NextResponse.json({ success: false, updatesProcessed: 0 })
+      }
+      const offsetParam = lastProcessedUpdateId > 0 ? `?offset=${lastProcessedUpdateId + 1}&timeout=1` : '?timeout=1'
+      const updRes = await fetch(`https://api.telegram.org/bot${botToken}/getUpdates${offsetParam}`)
+      const updData = await updRes.json().catch(() => null)
+      if (!updData?.ok || !Array.isArray(updData.result) || updData.result.length === 0) {
+        return NextResponse.json({ success: true, updatesProcessed: 0, events: [] })
+      }
+
+      const events = []
+      for (const upd of updData.result) {
+        if (typeof upd.update_id === 'number' && upd.update_id > lastProcessedUpdateId) {
+          lastProcessedUpdateId = upd.update_id
+        }
+        const out = await processSingleTelegramUpdate(botToken, upd)
+        if (out.userText || out.replyText || out.executedResults.length > 0) {
+          events.push(out)
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        updatesProcessed: events.length,
+        events
+      })
+    }
+
+    // 3. Direct Hermes external command
     if (body.action === 'hermes-command') {
       const text = String(body.text || body.message || '').trim()
       if (!text) {
@@ -135,203 +329,20 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         )
       }
-      const sectionContext = buildDefaultServerSectionContext()
-      const inferredCalls = inferNaturalLanguageToolCalls(
-        text,
-        sectionContext,
-        'confirm_sensitive'
-      )
-      const executedResults = []
-      const pendingConfirmations = []
-
-      for (const call of inferredCalls) {
-        if (call.requiresConfirmation && !body.autoConfirmSensitive) {
-          pendingConfirmations.push(call)
-        } else {
-          const res = await executeAgentToolServer(
-            call.toolName,
-            call.args,
-            DEFAULT_CUSTOMIZATION_CONFIG,
-            sectionContext
-          )
-          executedResults.push(res)
-        }
-      }
-
-      const replyLines: string[] = []
-      if (executedResults.length > 0) {
-        for (const r of executedResults) {
-          replyLines.push(`${r.success ? '✅' : '⚠️'} ${r.summaryEs}`)
-        }
-      } else if (pendingConfirmations.length > 0) {
-        for (const p of pendingConfirmations) {
-          replyLines.push(`🛡️ Confirmación requerida para \`${p.toolName}\`: ${p.reasonEs}`)
-        }
-      } else {
-        replyLines.push(
-          `🤖 **Hermes (Atlas Bridge)**: Estado actual: **${sectionContext.totalBookmarks} guardados**, **${sectionContext.totalRepos} repos GitHub**, **${sectionContext.fallbackLinksCount} enlaces de referencia** y **${sectionContext.separatedCount} archivos separados**.`
-        )
-      }
-
+      const out = await processSingleTelegramUpdate(botToken, {
+        message: { text, chat: { id: body.chatId || 0 } }
+      })
       return NextResponse.json({
         success: true,
         agent: 'hermes',
-        replyText: replyLines.join('\n\n'),
-        executedResults,
-        pendingConfirmations
+        ...out
       })
     }
 
-    // 3. Telegram Callback Query (Confirm / Cancel button clicked inside Telegram)
-    if (body.callback_query) {
-      const cq = body.callback_query
-      const chatId = cq.message?.chat?.id
-      const dataStr = String(cq.data || '')
-
-      if (dataStr.startsWith('confirm:')) {
-        const confirmId = dataStr.replace('confirm:', '')
-        const pendingCall = pendingTelegramConfirmations.get(confirmId)
-        if (!pendingCall) {
-          await answerCallbackQuery(botToken, cq.id, 'Esta confirmación ya expiró o fue ejecutada.')
-          return NextResponse.json({ ok: true })
-        }
-        pendingTelegramConfirmations.delete(confirmId)
-        const sectionContext = buildDefaultServerSectionContext()
-        const execRes = await executeAgentToolServer(
-          pendingCall.toolName,
-          pendingCall.args,
-          DEFAULT_CUSTOMIZATION_CONFIG,
-          sectionContext
-        )
-        await answerCallbackQuery(botToken, cq.id, 'Acción confirmada y ejecutada')
-        if (chatId) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `${execRes.success ? '✅' : '⚠️'} *Acción confirmada en Atlas:*\n${execRes.summaryEs}`
-          )
-        }
-        return NextResponse.json({ ok: true, executed: execRes })
-      }
-
-      if (dataStr.startsWith('cancel:')) {
-        const confirmId = dataStr.replace('cancel:', '')
-        pendingTelegramConfirmations.delete(confirmId)
-        await answerCallbackQuery(botToken, cq.id, 'Acción cancelada')
-        if (chatId) {
-          await sendTelegramMessage(botToken, chatId, '❌ *Acción cancelada por el usuario.*')
-        }
-        return NextResponse.json({ ok: true, cancelled: true })
-      }
-    }
-
-    // 4. Standard Telegram Incoming Message Webhook
-    const tgMessage = body.message || body.edited_message
-    if (tgMessage && tgMessage.text) {
-      const chatId = tgMessage.chat?.id
-      const text = String(tgMessage.text).trim()
-
-      // Optional allowlist of Telegram chat IDs for security
-      const allowedChats = String(process.env.TELEGRAM_ALLOWED_CHAT_IDS || '')
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-
-      if (allowedChats.length > 0 && !allowedChats.includes(String(chatId))) {
-        if (botToken && chatId) {
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `⛔ Tu Chat ID (\`${chatId}\`) no está en TELEGRAM_ALLOWED_CHAT_IDS.`
-          )
-        }
-        return NextResponse.json({ ok: true, unauthorized: true })
-      }
-
-      const sectionContext = buildDefaultServerSectionContext()
-
-      if (text === '/start' || text === '/help') {
-        const welcome = [
-          '🤖 *Hermes — Conectado a tu Atlas de Guardados*',
-          '',
-          `📊 *Estado en vivo:* ${sectionContext.totalBookmarks} guardados | ${sectionContext.totalRepos} repos GitHub | ${sectionContext.fallbackLinksCount} con "El Link de ese Link" | ${sectionContext.separatedCount} separados off-topic.`,
-          '',
-          'Podés escribirme en lenguaje natural igual que en el chat de la app:',
-          '• _"Guardá este repo https://github.com/upstash/context7"_',
-          '• _"¿Cuántos guardados y repos tengo ahora?"_',
-          '• _"Investigá los links y comentarios pendientes"_',
-          '• _"Separá los archivos off-topic no técnicos"_',
-          '• _"Recomendame un stack para un agente con MCP y Telegram"_',
-          '• _"Auditá la seguridad de pbakaus/impeccable"_'
-        ].join('\n')
-
-        if (botToken && chatId) {
-          await sendTelegramMessage(botToken, chatId, welcome)
-        }
-        return NextResponse.json({ ok: true, replyText: welcome })
-      }
-
-      const inferredCalls = inferNaturalLanguageToolCalls(
-        text,
-        sectionContext,
-        'confirm_sensitive'
-      )
-
-      const executedResults = []
-      const pendingConfirmations = []
-
-      for (const call of inferredCalls) {
-        if (shouldRequireToolConfirmation(call.toolName, 'confirm_sensitive')) {
-          pendingConfirmations.push(call)
-        } else {
-          const res = await executeAgentToolServer(
-            call.toolName,
-            call.args,
-            DEFAULT_CUSTOMIZATION_CONFIG,
-            sectionContext
-          )
-          executedResults.push(res)
-        }
-      }
-
-      const replyParts: string[] = []
-      for (const ex of executedResults) {
-        replyParts.push(`${ex.success ? '✅' : '⚠️'} ${ex.summaryEs}`)
-      }
-
-      if (pendingConfirmations.length > 0 && botToken && chatId) {
-        for (const pending of pendingConfirmations) {
-          const shortId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
-          pendingTelegramConfirmations.set(shortId, pending)
-          await sendTelegramMessage(
-            botToken,
-            chatId,
-            `🛡️ *Confirmación requerida por Hermes*\nHerramienta: \`${pending.toolName}\`\nMotivo: ${pending.reasonEs}`,
-            [
-              [
-                { text: '✅ Confirmar y Ejecutar', callback_data: `confirm:${shortId}` },
-                { text: '❌ Cancelar', callback_data: `cancel:${shortId}` }
-              ]
-            ]
-          )
-        }
-      }
-
-      if (replyParts.length === 0 && pendingConfirmations.length === 0) {
-        replyParts.push(
-          `🤖 *Hermes (Atlas)*: Recibí tu mensaje. Actualmente tenés *${sectionContext.totalBookmarks} guardados* y *${sectionContext.totalRepos} repositorios*. Decime si querés guardar un link, buscar un recurso, auditar un repo o armar un stack.`
-        )
-      }
-
-      if (replyParts.length > 0 && botToken && chatId) {
-        await sendTelegramMessage(botToken, chatId, replyParts.join('\n\n'))
-      }
-
-      return NextResponse.json({
-        ok: true,
-        executedResults,
-        pendingConfirmations
-      })
+    // 4. Standard Incoming Webhook Payload from Telegram
+    if (body.message || body.edited_message || body.callback_query) {
+      const out = await processSingleTelegramUpdate(botToken, body)
+      return NextResponse.json({ ok: true, ...out })
     }
 
     return NextResponse.json({ ok: true, message: 'No Telegram message payload found.' })

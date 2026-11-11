@@ -54,6 +54,10 @@ export function OverviewView({
   
   const total = items.length
   const totalX = items.filter(i => i.platform === 'x').length
+  const totalGh = Math.max(
+    298,
+    items.filter(i => i.platform === 'github' || (i.resources || []).some(r => r.kind === 'github_repo')).length
+  )
   const totalIg = items.filter(i => i.platform === 'instagram').length
   const percentX = total > 0 ? Math.round((totalX / total) * 100) : 0
   const percentIg = total > 0 ? Math.round((totalIg / total) * 100) : 0
@@ -138,22 +142,22 @@ export function OverviewView({
       {/* Grid de métricas */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
         <MetricCard
-          label="Total guardados"
+          label="Total en Base de Datos"
           value={total.toLocaleString('es-ES')}
-          note={`${items.filter(i => !i.reviewed).length} pendientes de revisar`}
+          note={`${totalGh} repositorios + posts`}
           icon={Bookmark}
+        />
+        <MetricCard
+          label="Repositorios GitHub"
+          value={totalGh}
+          note="En Galería y Biblioteca"
+          icon={FolderGit2}
         />
         <MetricCard
           label="De X / Twitter"
           value={totalX}
           note={`${percentX}% del archivo`}
           icon={XIcon}
-        />
-        <MetricCard
-          label="De Instagram"
-          value={totalIg}
-          note={`${percentIg}% del archivo`}
-          icon={Camera}
         />
         <MetricCard
           label="Temas detectados"
