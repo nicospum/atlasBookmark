@@ -21,7 +21,9 @@ import {
   ALL_APP_SECTIONS,
   ALL_LIBRARY_COLUMNS,
   DEFAULT_CUSTOMIZATION_CONFIG,
-  THEME_ACCENT_PALETTES
+  THEME_ACCENT_PALETTES,
+  loadClientApiKeys,
+  saveClientApiKeys
 } from '@/lib/customization-store'
 import type {
   AtlasCustomizationConfig,
@@ -49,6 +51,11 @@ export function CustomizationDrawer({
   const [newQaLabel, setNewQaLabel] = useState('')
   const [newQaPrompt, setNewQaPrompt] = useState('')
   const [newQaSection, setNewQaSection] = useState<string>('all')
+  const [telegramStatus, setTelegramStatus] = useState<string>('')
+  const [tgToken, setTgToken] = useState<string>(() => {
+    if (typeof window === 'undefined') return ''
+    return loadClientApiKeys().telegramBotToken || ''
+  })
 
   if (!open) return null
 
@@ -486,6 +493,66 @@ export function CustomizationDrawer({
                   <option value="openai">OpenAI ChatGPT</option>
                 </select>
               </div>
+            </div>
+
+            <div className="pt-2 border-t border-white/10 space-y-1.5">
+              <label className="block text-[11px] font-medium text-emerald-300">
+                Telegram Bot Token (para operar Hermes desde Telegram):
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={tgToken}
+                  onChange={e => {
+                    const val = e.target.value
+                    setTgToken(val)
+                    const current = loadClientApiKeys()
+                    saveClientApiKeys({ ...current, telegramBotToken: val })
+                  }}
+                  placeholder="123456789:ABCdefGHIjklMNO... (Token de @BotFather)"
+                  className="flex-1 rounded-lg border border-border bg-[#101218] px-2.5 py-1.5 text-xs text-white placeholder:text-muted-foreground focus:outline-none focus:border-emerald-500"
+                />
+                <Button
+                  size="xs"
+                  onClick={async () => {
+                    if (!tgToken.trim()) {
+                      setTelegramStatus('⚠️ Pegá primero el token de tu bot de Telegram.')
+                      return
+                    }
+                    setTelegramStatus('Conectando webhook con Telegram...')
+                    try {
+                      const res = await fetch('/api/agent/telegram', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          action: 'register-webhook',
+                          botToken: tgToken.trim()
+                        })
+                      })
+                      const data = await res.json()
+                      if (data.success) {
+                        update({
+                          hermesConfig: {
+                            ...config.hermesConfig,
+                            telegramBridgeEnabled: true
+                          }
+                        })
+                        setTelegramStatus(`✅ Bot vinculado a ${data.webhookUrl}`)
+                      } else {
+                        setTelegramStatus(`⚠️ Error: ${data.error || 'Token inválido'}`)
+                      }
+                    } catch (err: any) {
+                      setTelegramStatus(`⚠️ Error de red: ${err?.message || 'Reintentá'}`)
+                    }
+                  }}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white"
+                >
+                  Vincular Telegram
+                </Button>
+              </div>
+              {telegramStatus && (
+                <p className="text-[11px] text-emerald-300">{telegramStatus}</p>
+              )}
             </div>
           </section>
 

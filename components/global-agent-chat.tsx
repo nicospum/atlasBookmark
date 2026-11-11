@@ -360,7 +360,8 @@ export function GlobalAgentChat({
     apiKeys.gemini,
     apiKeys.anthropic,
     apiKeys.openai,
-    apiKeys.githubToken
+    apiKeys.githubToken,
+    apiKeys.telegramBotToken
   ].filter(Boolean).length
 
   // Floating trigger button when closed
